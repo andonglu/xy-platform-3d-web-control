@@ -6,13 +6,15 @@ let ws = null;
 let connected = false;
 let reconnectTimer = null;
 
-export function connect(onState, onPath, onEvent, onConnect) {
+export function connect(onState, onPath, onEvent, onConnect, onConfig) {
   function doConnect() {
     ws = new WebSocket(WS_URL);
     ws.onopen = () => {
       connected = true;
       onConnect(true);
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      // 连接成功后主动读取服务端轴配置
+      send({ type: 'get_config' });
     };
     ws.onclose = () => {
       connected = false;
@@ -28,6 +30,7 @@ export function connect(onState, onPath, onEvent, onConnect) {
           case 'path': onPath(msg); break;
           case 'event': onEvent(msg); break;
           case 'zones': onEvent({ type: 'zones', zones: msg.zones }); break;
+          case 'config': if (onConfig) onConfig(msg); break;
         }
       } catch (e) { console.error('parse error', e); }
     };

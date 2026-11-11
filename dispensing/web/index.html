@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>3D 点胶控制系统</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231b2030'/%3E%3Cpath d='M16 4 L23 17 L9 17 Z' fill='%232ad0c0'/%3E%3Ccircle cx='16' cy='23' r='3' fill='%23ff7a1a'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="src/style.css" />
 </head>
 <body>
@@ -91,6 +92,61 @@
       <div class="section">
         <h3>胶阀</h3>
         <button id="btn-valve" class="toggle off">胶阀: 关</button>
+      </div>
+
+      <div class="section">
+        <h3>3 轴模型创建</h3>
+        <div class="form-row">
+          <label>机型</label>
+          <select id="machine-type">
+            <option value="gantry">龙门式 Gantry</option>
+            <option value="cantilever">悬臂式 Cantilever</option>
+            <option value="movingTable">工作台移动式</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>X 行程</label>
+          <input id="cfg-xmin" type="number" step="10" value="-150" />
+          <span class="tilde">~</span>
+          <input id="cfg-xmax" type="number" step="10" value="150" />
+        </div>
+        <div class="form-row">
+          <label>Y 行程</label>
+          <input id="cfg-ymin" type="number" step="10" value="-150" />
+          <span class="tilde">~</span>
+          <input id="cfg-ymax" type="number" step="10" value="150" />
+        </div>
+        <div class="form-row">
+          <label>Z 行程</label>
+          <input id="cfg-zmin" type="number" step="10" value="0" />
+          <span class="tilde">~</span>
+          <input id="cfg-zmax" type="number" step="10" value="80" />
+        </div>
+        <div class="form-row">
+          <label>台面边长</label>
+          <input id="cfg-table" type="number" step="10" value="320" />
+        </div>
+        <div class="form-row">
+          <label>横梁高度</label>
+          <input id="cfg-height" type="number" step="10" value="130" />
+        </div>
+        <div class="row">
+          <button id="btn-build-machine" class="primary">创建 / 重建模型</button>
+        </div>
+        <div class="row">
+          <button id="btn-sync-config">同步到服务端</button>
+          <button id="btn-get-config">读取配置</button>
+        </div>
+        <div class="form-row checks">
+          <label><input type="checkbox" id="chk-workspace" checked /> 工作空间</label>
+          <label><input type="checkbox" id="chk-sensors" checked /> 传感器</label>
+          <label><input type="checkbox" id="chk-labels" checked /> 轴标签</label>
+        </div>
+        <div class="row">
+          <button id="btn-reset-view">复位视角</button>
+          <button id="btn-clear-trail">清除胶路</button>
+        </div>
+        <div id="machine-info" class="machine-info">龙门式 · X[-150,150] Y[-150,150] Z[0,80]</div>
       </div>
 
       <div class="section">

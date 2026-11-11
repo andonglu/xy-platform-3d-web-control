@@ -73,6 +73,21 @@ select, input[type="number"] {
   padding: 4px 8px; background: #111; color: #eee; border: 1px solid #444; border-radius: 3px;
 }
 
+/* 3 轴模型创建表单 */
+.form-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; }
+.form-row > label:first-child { width: 68px; flex-shrink: 0; color: #aaa; }
+.form-row input[type="number"] { width: 66px; padding: 4px 6px; }
+.form-row select { flex: 1; min-width: 0; }
+.form-row .tilde { color: #666; }
+.form-row.checks { gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.form-row.checks label { width: auto; display: inline-flex; align-items: center; gap: 3px; color: #bbb; cursor: pointer; }
+.form-row.checks input { width: auto; }
+.machine-info {
+  margin-top: 8px; padding: 6px 8px; background: #111a2e; border-left: 3px solid #2e86c1;
+  font-size: 11px; font-family: 'Consolas', monospace; color: #8be9fd; line-height: 1.5;
+  word-break: break-all;
+}
+
 .log {
   max-height: 150px; overflow-y: auto; font-size: 12px; font-family: 'Consolas', monospace;
   background: #111; padding: 8px; border-radius: 4px; line-height: 1.5;
