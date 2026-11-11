@@ -1,0 +1,27 @@
+# === Web 前端 (app/) ===
+app/node_modules/
+app/dist/
+app/.vite/
+
+# === C# 上位机 (server/) ===
+server/MotionControl/bin/
+server/MotionControl/obj/
+server/MotionControl/.vs/
+
+# === IDE / 编辑器 ===
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userprefs
+
+# === 操作系统 ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === 日志 / 临时 ===
+*.log
+*.tmp
+*.bak

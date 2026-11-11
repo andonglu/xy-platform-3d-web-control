@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>三轴运动平台 · Web 3D 控制系统</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+<div id="app">
+  <div id="stage"></div>
+
+  <aside id="panel">
+    <header class="panel-head">
+      <h1>三轴运动平台</h1>
+      <span id="conn-badge" class="badge badge-sim">内置模拟</span>
+    </header>
+
+    <!-- 连接 -->
+    <section class="card">
+      <h2>通信连接</h2>
+      <div class="row">
+        <input id="ws-url" type="text" value="ws://localhost:8520/ws" spellcheck="false" aria-label="WebSocket 地址">
+        <button id="btn-connect" class="btn">连接</button>
+      </div>
+      <p class="hint">连接 C# 上位机；未连接时使用浏览器内置模拟控制器</p>
+    </section>
+
+    <!-- 状态 -->
+    <section class="card">
+      <h2>轴状态</h2>
+      <div class="axis-grid">
+        <div class="axis-row" data-axis="x">
+          <span class="axis-name x">X</span>
+          <span class="axis-pos" id="pos-x">0.00</span>
+          <span class="axis-vel" id="vel-x">0.0</span>
+          <span class="axis-state" id="state-x">Idle</span>
+        </div>
+        <div class="axis-row" data-axis="y">
+          <span class="axis-name y">Y</span>
+          <span class="axis-pos" id="pos-y">0.00</span>
+          <span class="axis-vel" id="vel-y">0.0</span>
+          <span class="axis-state" id="state-y">Idle</span>
+        </div>
+        <div class="axis-row" data-axis="z">
+          <span class="axis-name z">Z</span>
+          <span class="axis-pos" id="pos-z">0.00</span>
+          <span class="axis-vel" id="vel-z">0.0</span>
+          <span class="axis-state" id="state-z">Idle</span>
+        </div>
+      </div>
+      <div class="row status-line">
+        <span>激光 <b id="laser-state" class="laser-off">关闭</b></span>
+        <span>模式 <b id="mode-state">Idle</b></span>
+      </div>
+    </section>
+
+    <!-- 视角 -->
+    <section class="card">
+      <h2>视角</h2>
+      <div class="btn-row">
+        <button class="btn view-btn" data-view="persp">透视</button>
+        <button class="btn view-btn" data-view="top">俯视</button>
+        <button class="btn view-btn" data-view="front">正视</button>
+        <button class="btn view-btn" data-view="side">侧视</button>
+      </div>
+    </section>
+
+    <!-- 轴控制 -->
+    <section class="card">
+      <h2>轴控制 <small>mm</small></h2>
+      <div class="jog-row" data-axis="x">
+        <button class="btn jog" data-dir="-1" aria-label="X 负向点动">−</button>
+        <input type="range" id="slider-x" min="-100" max="100" step="0.5" value="0" aria-label="X 轴位置">
+        <button class="btn jog" data-dir="1" aria-label="X 正向点动">＋</button>
+      </div>
+      <div class="jog-row" data-axis="y">
+        <button class="btn jog" data-dir="-1" aria-label="Y 负向点动">−</button>
+        <input type="range" id="slider-y" min="-100" max="100" step="0.5" value="0" aria-label="Y 轴位置">
+        <button class="btn jog" data-dir="1" aria-label="Y 正向点动">＋</button>
+      </div>
+      <div class="jog-row" data-axis="z">
+        <button class="btn jog" data-dir="-1" aria-label="Z 负向点动">−</button>
+        <input type="range" id="slider-z" min="0" max="60" step="0.5" value="0" aria-label="Z 轴位置">
+        <button class="btn jog" data-dir="1" aria-label="Z 正向点动">＋</button>
+      </div>
+      <div class="btn-row">
+        <button id="btn-home" class="btn btn-primary">回零 Home</button>
+        <button id="btn-estop" class="btn btn-danger">急停</button>
+      </div>
+    </section>
+
+    <!-- 激光 -->
+    <section class="card">
+      <h2>激光</h2>
+      <div class="btn-row">
+        <button id="btn-laser" class="btn btn-laser" aria-pressed="false">
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 0 L9.8 6.2 L16 8 L9.8 9.8 L8 16 L6.2 9.8 L0 8 L6.2 6.2 Z" fill="currentColor"/></svg>
+          <span id="laser-label">开启激光</span>
+        </button>
+        <button id="btn-clear" class="btn">清除轨迹</button>
+      </div>
+    </section>
+
+    <!-- 插补演示 -->
+    <section class="card">
+      <h2>2D 插补演示</h2>
+      <div class="btn-row">
+        <button class="btn demo-btn" data-demo="star">五角星 · 直线</button>
+        <button class="btn demo-btn" data-demo="circle">整圆 · 圆弧</button>
+        <button class="btn demo-btn" data-demo="combo">综合图案</button>
+      </div>
+    </section>
+
+    <!-- 日志 -->
+    <section class="card grow">
+      <h2>运行日志</h2>
+      <ul id="log" class="log"></ul>
+    </section>
+  </aside>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
