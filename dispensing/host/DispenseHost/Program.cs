@@ -1,6 +1,8 @@
 using DispenseHost.CadImport;
 using DispenseHost.Net;
 using DispenseHost.PathPlan;
+using DispenseHost.PatternPlan;
+using DispenseHost.Testing;
 
 // ---------------------------------------------------------------------------
 // 3D 点胶上位机 (DispenseHost)
@@ -44,6 +46,7 @@ while (true)
 {
     Console.Write("> ");
     var line = Console.ReadLine();
+    if (line is null) break;                      // EOF (管道输入结束)
     if (string.IsNullOrWhiteSpace(line)) continue;
     var parts = line.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
     var cmd = parts[0].ToLowerInvariant();
@@ -121,6 +124,42 @@ while (true)
                         Console.WriteLine($"  [{i}] {p.Count} 点, 长度 {PathLength(p):F1}mm");
                 }
                 break;
+
+            case "pattern":
+            {
+                // 平面图案测试: 圆形 / 矩形 / 组合, 不依赖 STL 文件
+                var kind = parts.Length >= 2 ? parts[1].ToLowerInvariant() : "circle";
+                var patternFeed = parts.Length >= 3 ? double.Parse(parts[2]) : 60;
+                var job = new PatternJob();
+                if (kind is "circle" or "both")
+                    job.Add(PatternPlanner.Plan(new PatternSpec
+                    {
+                        Kind = PatternKind.Circle, Name = "圆形 R30",
+                        Radius = 30, Segments = 72, Z = PatternPlanner.WorkHeight, Feed = patternFeed,
+                    }));
+                if (kind is "rect" or "rectangle" or "both")
+                    job.Add(PatternPlanner.Plan(new PatternSpec
+                    {
+                        Kind = PatternKind.Rectangle, Name = "矩形 80x50",
+                        Width = 80, Height = 50, Z = PatternPlanner.WorkHeight, Feed = patternFeed,
+                    }));
+                if (job.Patterns.Count == 0) { Console.WriteLine("模式: circle / rect / both"); break; }
+                currentPaths = job.Patterns.Select(p => p.Points).ToList();
+                Console.WriteLine($"平面图案已生成: {job.Patterns.Count} 段, {job.TotalPoints} 点, 总长 {job.TotalLength:F1}mm");
+                foreach (var p in job.Patterns)
+                    Console.WriteLine($"  {p.Name}: {p.PointCount} 点, {p.Length:F1}mm, 闭合={p.IsClosed}");
+                break;
+            }
+
+            case "selftest":
+            {
+                var runner = new SelfTestRunner(client);
+                runner.OnLog += m => Console.WriteLine(m);
+                var report = await runner.RunAsync();
+                Console.WriteLine();
+                Console.WriteLine(report.ToText());
+                break;
+            }
 
             case "upload":
                 if (currentPaths is null || currentPaths.Count == 0) { Console.WriteLine("请先 gen 路径"); break; }
@@ -202,6 +241,10 @@ static void PrintHelp()
       gen boundary               从边界生成 3D 路径
       gen slice <z>              在 Z 高度切片生成路径
       gen project <z>            边界投影到 XY 平面 (Z 固定)
+      pattern circle [feed]      生成平面圆形图案 (R30, Z=8)
+      pattern rect [feed]        生成平面矩形图案 (80x50, Z=8)
+      pattern both [feed]        生成圆形+矩形组合图案
+      selftest                   自动测试: 圆形/矩形/组合, 输出偏差报告
       preview                    预览当前路径
       upload [feed]              上传路径到服务端 (feed=进给速度 mm/s)
       run                        发送执行指令
