@@ -1,0 +1,17 @@
+{
+  "name": "dispensing-3d-web",
+  "version": "1.0.0",
+  "description": "3D 点胶 Web 可视化 (端口 8530, 与激光项目分离)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --port 5174"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

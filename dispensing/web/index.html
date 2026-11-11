@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D 点胶控制系统</title>
+  <link rel="stylesheet" href="src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 左侧控制面板 -->
+    <div id="panel">
+      <div class="section">
+        <h2>3D 点胶控制</h2>
+        <div id="status-badge" class="badge disconnected">未连接</div>
+      </div>
+
+      <div class="section">
+        <h3>运动控制</h3>
+        <div class="row">
+          <button id="btn-home">回零</button>
+          <button id="btn-estop" class="danger">急停</button>
+          <button id="btn-reset" class="warn">复位报警</button>
+        </div>
+        <div class="row">
+          <button id="btn-run" class="primary">执行点胶</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>手动控制</h3>
+        <div class="jog-grid">
+          <div class="jog-row">
+            <label>X:</label>
+            <button data-axis="x" data-dir="-1">-</button>
+            <span id="x-pos" class="pos-display">0.000</span>
+            <button data-axis="x" data-dir="1">+</button>
+          </div>
+          <div class="jog-row">
+            <label>Y:</label>
+            <button data-axis="y" data-dir="-1">-</button>
+            <span id="y-pos" class="pos-display">0.000</span>
+            <button data-axis="y" data-dir="1">+</button>
+          </div>
+          <div class="jog-row">
+            <label>Z:</label>
+            <button data-axis="z" data-dir="-1">-</button>
+            <span id="z-pos" class="pos-display">0.000</span>
+            <button data-axis="z" data-dir="1">+</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>定位:</label>
+          <select id="ptp-axis">
+            <option value="x">X</option>
+            <option value="y">Y</option>
+            <option value="z">Z</option>
+          </select>
+          <input id="ptp-pos" type="number" step="1" value="0" style="width:80px" />
+          <button id="btn-ptp">定位</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>胶阀</h3>
+        <button id="btn-valve" class="toggle off">胶阀: 关</button>
+      </div>
+
+      <div class="section">
+        <h3>CAD 模型预览</h3>
+        <input type="file" id="file-stl" accept=".stl" />
+        <div class="row">
+          <button id="btn-clear-model">清除模型</button>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>禁止区管理</h3>
+        <div id="zone-list"></div>
+      </div>
+
+      <div class="section">
+        <h3>日志</h3>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+
+    <!-- 右侧 3D 场景 -->
+    <div id="canvas-container"></div>
+
+    <!-- 撞机报警弹窗 -->
+    <div id="collision-alert" class="alert hidden">
+      <div class="alert-content">
+        <h2>⚠ 撞机报警</h2>
+        <p id="collision-msg"></p>
+        <button id="btn-alert-reset" class="warn">复位并继续</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

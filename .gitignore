@@ -3,6 +3,16 @@ app/node_modules/
 app/dist/
 app/.vite/
 
+# === 3D 点胶 (dispensing/) ===
+dispensing/web/node_modules/
+dispensing/web/dist/
+dispensing/web/.vite/
+dispensing/**/bin/
+dispensing/**/obj/
+dispensing/**/*.dll
+dispensing/**/*.exe
+dispensing/**/*.pdb
+
 # === C# 上位机 (server/) ===
 server/MotionControl/bin/
 server/MotionControl/obj/
