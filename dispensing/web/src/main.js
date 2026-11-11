@@ -27,6 +27,26 @@ connect(
     document.getElementById('y-pos').textContent = targetState.y.toFixed(3);
     document.getElementById('z-pos').textContent = targetState.z.toFixed(3);
 
+    // 更新轴状态和传感器信号
+    ['x', 'y', 'z'].forEach(ax => {
+      const axData = state[ax];
+      if (!axData) return;
+      const stateEl = document.getElementById(`${ax}-state`);
+      if (stateEl) {
+        stateEl.textContent = axData.state || 'Idle';
+        stateEl.className = 'axis-state ' + (axData.state || 'Idle').toLowerCase();
+      }
+      const sen = axData.sensors;
+      if (sen) {
+        const homeEl = document.getElementById(`${ax}-home`);
+        const limPosEl = document.getElementById(`${ax}-limpos`);
+        const limNegEl = document.getElementById(`${ax}-limneg`);
+        if (homeEl) homeEl.classList.toggle('active', !!sen.home);
+        if (limPosEl) limPosEl.classList.toggle('active', !!sen.limPos);
+        if (limNegEl) limNegEl.classList.toggle('active', !!sen.limNeg);
+      }
+    });
+
     // 胶阀状态
     const valveBtn = document.getElementById('btn-valve');
     valveBtn.className = 'toggle ' + (targetState.valve ? 'on' : 'off');
