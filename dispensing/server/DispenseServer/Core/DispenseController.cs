@@ -5,11 +5,17 @@ namespace DispenseServer.Core;
 /// <summary>
 /// 3D 点胶运动控制器: 接收上位机上传的路径，执行 3D 插补运动。
 /// 与激光项目的 MotionController 完全独立。
-/// 
+///
 /// 工作流程:
 ///   上位机 → 上传路径 (upload) → 服务端执行 (run)
 ///   执行: PTP 到起点 → 下降到工作高度 → 开胶 → 沿 3D 路径插补 → 关胶 → 抬升
 ///   撞机检测每周期运行，触发即停机报警
+///
+/// 撞机恢复流程:
+///   1. 撞机触发 → EmergencyStop (轴 Faulted) → CollisionAlarm=true
+///   2. reset_alarm → ClearFault (轴 Idle, 位置不动) → CollisionAlarm=false
+///   3. home → 三轴朝零点开关慢速运动 → 碰到开关 → 修正到 HomePos
+///   4. 恢复正常运动
 /// </summary>
 public sealed class DispenseController
 {
@@ -36,6 +42,7 @@ public sealed class DispenseController
     private RunState? _run;
     private readonly int[] _jogDir = new int[3];
     private bool _homing;
+    private int _homeDoneCount;
     private double _t, _emitAcc;
 
     public event Action<object>? OnState;
@@ -74,23 +81,41 @@ public sealed class DispenseController
 
     // ---------------- 指令入口 ----------------
 
+    /// <summary>
+    /// 回零: 三轴朝零点开关方向慢速运动, 碰到开关后修正到 HomePos。
+    /// 撞机报警状态下拒绝执行 (需先 ResetAlarm)。
+    /// </summary>
     public void Home()
     {
-        ClearFault();
+        if (CollisionAlarm)
+        {
+            OnEvent?.Invoke("error", "撞机报警未复位，无法回零，请先执行 reset_alarm");
+            return;
+        }
         _run = null;
+        _homeDoneCount = 0;
         for (int i = 0; i < 3; i++)
         {
             _jogDir[i] = 0;
-            _card.SetTarget(i, 0, 80);
+            _card.StartHome(i);
         }
         _homing = true;
-        OnEvent?.Invoke("ok", "回零开始");
+        OnEvent?.Invoke("ok", "回零开始: 三轴朝零点开关运动");
     }
 
     public void Ptp(int axis, double pos)
     {
         if (_run is not null || axis < 0) return;
-        ClearFault();
+        if (CollisionAlarm)
+        {
+            OnEvent?.Invoke("error", "撞机报警未复位，无法运动，请先执行 reset_alarm");
+            return;
+        }
+        if (_homing)
+        {
+            OnEvent?.Invoke("warn", "正在回零，无法运动");
+            return;
+        }
         _jogDir[axis] = 0;
         _card.SetTarget(axis, pos, axis == Axes.Z ? 60 : 120);
     }
@@ -98,7 +123,16 @@ public sealed class DispenseController
     public void Jog(int axis, int dir)
     {
         if (_run is not null || axis < 0) return;
-        ClearFault();
+        if (CollisionAlarm)
+        {
+            OnEvent?.Invoke("error", "撞机报警未复位，无法点动，请先执行 reset_alarm");
+            return;
+        }
+        if (_homing)
+        {
+            OnEvent?.Invoke("warn", "正在回零，无法点动");
+            return;
+        }
         _jogDir[axis] = Math.Sign(dir);
     }
 
@@ -123,7 +157,12 @@ public sealed class DispenseController
         }
         if (CollisionAlarm)
         {
-            OnEvent?.Invoke("error", "撞机报警未复位，无法运行");
+            OnEvent?.Invoke("error", "撞机报警未复位，无法运行，请先执行 reset_alarm + home");
+            return;
+        }
+        if (_homing)
+        {
+            OnEvent?.Invoke("error", "正在回零，无法运行");
             return;
         }
         r.CurrentPhase = RunState.Phase.PtpStart;
@@ -140,31 +179,47 @@ public sealed class DispenseController
         OnEvent?.Invoke("ok", $"开始执行点胶作业, 起点 ({firstPt.X:F1}, {firstPt.Y:F1}, {firstPt.Z:F1})");
     }
 
+    /// <summary>急停: 停止所有运动, 轴进入 Faulted</summary>
     public void EmergencyStop()
     {
         _run = null;
+        _homing = false;
         ValveOn = false;
         _card.StopAll();
-        OnEvent?.Invoke("error", "急停触发, 撞机报警或用户中止");
+        OnEvent?.Invoke("error", "急停触发, 轴已停止 (Faulted)");
     }
 
+    /// <summary>
+    /// 复位报警: 清除撞机报警标志, 轴从 Faulted 恢复到 Idle (位置不动)。
+    /// 复位后需要执行 Home 回零才能恢复正常运动。
+    /// </summary>
     public void ResetAlarm()
     {
-        CollisionAlarm = false;
-        CollisionMessage = null;
-        _card.StopAll();
-        // 重新初始化轴卡 (清除 Faulted)
-        for (int i = 0; i < 3; i++) _card.SetPosition(i, _card.Read(i).Pos, 0);
-        OnEvent?.Invoke("ok", "撞机报警已复位");
-    }
-
-    private void ClearFault()
-    {
-        if (CollisionAlarm)
+        if (!CollisionAlarm && _card.Read(Axes.X).State != AxisState.Faulted)
         {
-            OnEvent?.Invoke("warn", "撞机报警未复位，请先 ResetAlarm");
+            OnEvent?.Invoke("warn", "当前无报警需要复位");
             return;
         }
+        CollisionAlarm = false;
+        CollisionMessage = null;
+        _card.ClearFault();  // 轴从 Faulted → Idle, 位置保持
+        OnEvent?.Invoke("ok", "撞机报警已复位, 轴已恢复 (位置未变), 建议执行 home 回零");
+    }
+
+    /// <summary>配置轴参数 (行程/零点/传感器位置)</summary>
+    public void ConfigureAxis(int axis, AxisConfig cfg)
+    {
+        _card.ConfigureAxis(axis, cfg);
+        OnEvent?.Invoke("ok", $"轴 {Axes.Names[axis]} 已配置: 行程 {cfg.TravelMin}~{cfg.TravelMax}, 零点 {cfg.HomePos}, " +
+                              $"传感器 N{cfg.LimitNegative}/H{cfg.HomeSensorPos}/P{cfg.LimitPositive}");
+    }
+
+    /// <summary>获取所有轴配置</summary>
+    public List<AxisConfig> GetConfigs()
+    {
+        var list = new List<AxisConfig>();
+        for (int i = 0; i < 3; i++) list.Add(_card.GetConfig(i));
+        return list;
     }
 
     private static Point3D GetFirstPoint(List<DispensePath3D> paths)
@@ -183,7 +238,7 @@ public sealed class DispenseController
         TickRun(dt);
         _card.Tick(dt);
 
-        // 撞机检测 (每周期)
+        // 撞机检测 (每周期), 只在非报警时检测
         if (!CollisionAlarm)
         {
             var (triggered, isHard) = _collision.Check();
@@ -194,10 +249,53 @@ public sealed class DispenseController
             // 软预警由 OnCollision 事件回调触发 OnEvent, 不停机
         }
 
-        if (_homing && Enumerable.Range(0, 3).All(i => _card.Read(i).State != AxisState.Moving && _card.Read(i).State != AxisState.Homing))
+        // 传感器极限触发检测 (轴卡自身的极限传感器, 独立于 CollisionChecker)
+        if (!CollisionAlarm)
         {
-            _homing = false;
-            OnEvent?.Invoke("ok", "回零完成");
+            for (int i = 0; i < 3; i++)
+            {
+                var st = _card.Read(i);
+                var sen = _card.ReadSensors(i);
+                if (st.State == AxisState.Faulted && sen.AnyLimit)
+                {
+                    // 极限传感器触发的 Faulted -> 设置撞机报警
+                    string axisName = Axes.Names[i];
+                    string limitName = sen.LimitPositive ? "正极限" : "负极限";
+                    CollisionAlarm = true;
+                    CollisionMessage = $"[硬撞机] 轴 {axisName} 触发{limitName}传感器! 位置 {st.Pos:F1}mm";
+                    EmergencyStop();
+                    OnEvent?.Invoke("error", CollisionMessage);
+                    break;
+                }
+            }
+        }
+
+        // 回零完成检测: 三轴都回到 Idle (碰到零点开关后 StopHome 会设 Idle)
+        if (_homing)
+        {
+            int doneCount = 0;
+            for (int i = 0; i < 3; i++)
+            {
+                var st = _card.Read(i);
+                if (st.State != AxisState.Homing && st.State != AxisState.Moving)
+                    doneCount++;
+            }
+            if (doneCount == 3)
+            {
+                _homing = false;
+                // 检查是否有轴回零失败 (Faulted)
+                bool anyFaulted = false;
+                for (int i = 0; i < 3; i++)
+                {
+                    if (_card.Read(i).State == AxisState.Faulted)
+                    {
+                        anyFaulted = true;
+                        OnEvent?.Invoke("error", $"轴 {Axes.Names[i]} 回零失败 (可能撞到极限)");
+                    }
+                }
+                if (!anyFaulted)
+                    OnEvent?.Invoke("ok", "回零完成, 三轴已在零点位置");
+            }
         }
 
         _emitAcc += dt;
@@ -210,7 +308,7 @@ public sealed class DispenseController
 
     private void TickJog(double dt)
     {
-        if (_run is not null) return;
+        if (_run is not null || _homing) return;
         for (int i = 0; i < 3; i++)
         {
             if (_jogDir[i] == 0) continue;
@@ -224,6 +322,15 @@ public sealed class DispenseController
     {
         var r = _run;
         if (r is null) return;
+
+        // 撞机时中止作业
+        if (CollisionAlarm)
+        {
+            _run = null;
+            ValveOn = false;
+            OnEvent?.Invoke("error", "点胶作业因撞机中止");
+            return;
+        }
 
         switch (r.CurrentPhase)
         {
@@ -316,24 +423,31 @@ public sealed class DispenseController
         var sy = _card.Read(Axes.Y);
         var sz = _card.Read(Axes.Z);
 
-        object Pack(AxisStatus s) => new
+        // 传感器信号
+        var senX = _card.ReadSensors(Axes.X);
+        var senY = _card.ReadSensors(Axes.Y);
+        var senZ = _card.ReadSensors(Axes.Z);
+
+        object Pack(AxisStatus s, SensorState sen) => new
         {
             pos = Math.Round(s.Pos, 3),
             vel = Math.Round(s.Vel, 2),
             state = _homing ? "Homing" : (CollisionAlarm ? "Faulted" : s.State.ToString()),
+            sensors = new { home = sen.Home, limPos = sen.LimitPositive, limNeg = sen.LimitNegative },
         };
 
         return new
         {
             type = "state",
             t = Math.Round(_t, 3),
-            x = Pack(sx),
-            y = Pack(sy),
-            z = Pack(sz),
+            x = Pack(sx, senX),
+            y = Pack(sy, senY),
+            z = Pack(sz, senZ),
             valve = ValveOn,
             mode = _run is not null ? $"Dispense:{_run.CurrentPhase}" : (_homing ? "Homing" : "Idle"),
             collision = CollisionAlarm,
             collisionMsg = CollisionMessage ?? "",
+            homing = _homing,
         };
     }
 }

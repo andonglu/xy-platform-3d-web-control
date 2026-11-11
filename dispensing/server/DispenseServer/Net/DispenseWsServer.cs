@@ -147,6 +147,45 @@ public sealed class DispenseWsServer : IDisposable
                     Broadcast(new { type = "zones", zones = zones.Select(z => new { z.Name, z.XMin, z.XMax, z.YMin, z.YMax, z.ZMin, z.ZMax }) });
                     break;
 
+                case "config_axis":
+                {
+                    int axisIdx = Axes.FromName(root.GetProperty("axis").GetString() ?? "");
+                    if (axisIdx < 0)
+                    {
+                        Broadcast(new { type = "event", level = "error", msg = "无效轴名" });
+                        break;
+                    }
+                    var cfg = new AxisConfig(
+                        TravelMin: root.GetProperty("travelMin").GetDouble(),
+                        TravelMax: root.GetProperty("travelMax").GetDouble(),
+                        HomePos: root.GetProperty("homePos").GetDouble(),
+                        LimitNegative: root.GetProperty("limitNeg").GetDouble(),
+                        LimitPositive: root.GetProperty("limitPos").GetDouble(),
+                        HomeSensorPos: root.GetProperty("homeSensor").GetDouble(),
+                        HomeVel: root.TryGetProperty("homeVel", out var hv) ? hv.GetDouble() : 20);
+                    _controller.ConfigureAxis(axisIdx, cfg);
+                    break;
+                }
+
+                case "get_config":
+                    var configs = _controller.GetConfigs();
+                    Broadcast(new
+                    {
+                        type = "config",
+                        axes = configs.Select((c, i) => new
+                        {
+                            name = Axes.Names[i],
+                            travelMin = c.TravelMin,
+                            travelMax = c.TravelMax,
+                            homePos = c.HomePos,
+                            limitNeg = c.LimitNegative,
+                            limitPos = c.LimitPositive,
+                            homeSensor = c.HomeSensorPos,
+                            homeVel = c.HomeVel,
+                        }),
+                    });
+                    break;
+
                 default:
                     Broadcast(new { type = "event", level = "warn", msg = $"未知指令: {type}" });
                     break;

@@ -19,6 +19,7 @@ public sealed class DispenseClient : IDisposable
     public event Action<bool>? OnConnected;
     public event Action<string>? OnEvent;     // 服务端事件消息
     public event Action<string>? OnCollision; // 撞机报警
+    public event Action<string>? OnConfig;    // 服务端轴配置响应
 
     public DispenseClient(string url = "ws://localhost:8530/ws") => _url = url;
 
@@ -72,6 +73,16 @@ public sealed class DispenseClient : IDisposable
                 case "state":
                     // 状态更新由 UI 层处理, 这里不处理
                     break;
+                case "config":
+                    var axesEl = root.GetProperty("axes");
+                    var sb = new StringBuilder();
+                    foreach (var ax in axesEl.EnumerateArray())
+                    {
+                        sb.AppendLine($"  {ax.GetProperty("name")}: 行程 {ax.GetProperty("travelMin")}~{ax.GetProperty("travelMax")}, " +
+                                      $"零点 {ax.GetProperty("homePos")}, 传感器 N{ax.GetProperty("limitNeg")}/H{ax.GetProperty("homeSensor")}/P{ax.GetProperty("limitPos")}");
+                    }
+                    OnConfig?.Invoke(sb.ToString());
+                    break;
             }
         }
         catch { }
@@ -114,6 +125,22 @@ public sealed class DispenseClient : IDisposable
     public async Task HomeAsync() => await SendAsync(new { type = "home" });
     public async Task EstopAsync() => await SendAsync(new { type = "estop" });
     public async Task ResetAlarmAsync() => await SendAsync(new { type = "reset_alarm" });
+
+    /// <summary>配置服务端轴参数 (行程/零点/传感器位置)</summary>
+    public async Task ConfigureAxisAsync(string axis, double travelMin, double travelMax,
+        double homePos, double limitNeg, double limitPos, double homeSensor, double homeVel = 20)
+    {
+        await SendAsync(new
+        {
+            type = "config_axis",
+            axis,
+            travelMin, travelMax, homePos, limitNeg, limitPos, homeSensor, homeVel,
+        });
+        OnLog?.Invoke($"已配置轴 {axis}: 行程 {travelMin}~{travelMax}, 零点 {homePos}, 传感器 N{limitNeg}/H{homeSensor}/P{limitPos}");
+    }
+
+    /// <summary>查询服务端轴配置</summary>
+    public async Task GetConfigAsync() => await SendAsync(new { type = "get_config" });
 
     private async Task SendAsync(object msg)
     {

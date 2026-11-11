@@ -23,13 +23,16 @@ using var server = new DispenseWsServer(controller, collision, "http://localhost
 server.Start();
 
 Console.WriteLine("3D 点胶服务端 (DispenseServer)");
-Console.WriteLine("  轴卡: 模拟轴卡 SimulatedDispenseCard (X±150 Y±150 Z 0~80)");
+Console.WriteLine("  轴卡: 模拟轴卡 SimulatedDispenseCard (可配置行程/零点/传感器)");
 Console.WriteLine("  插补: 3D 空间直线 / 螺旋线");
-Console.WriteLine("  撞机: 工作空间边界 + 禁止区检测 (安全余量 5mm, 预判 0.5s)");
+Console.WriteLine("  撞机: 工作空间边界 + 禁止区 + 极限传感器检测");
 Console.WriteLine("  监听: ws://localhost:8530/ws");
-Console.WriteLine("  状态广播: 30 Hz, Ctrl+C 退出");
+Console.WriteLine("  状态广播: 30 Hz (含传感器信号), Ctrl+C 退出");
 Console.WriteLine();
-Console.WriteLine("指令: home / ptp / jog / valve / upload(路径) / run / estop / reset_alarm / add_zone / list_zones");
+Console.WriteLine("指令: home / ptp / jog / valve / upload / run / estop / reset_alarm");
+Console.WriteLine("      add_zone / list_zones / config_axis / get_config");
+Console.WriteLine();
+Console.WriteLine("撞机恢复流程: reset_alarm (清报警+轴恢复Idle) → home (回零) → 正常运动");
 
 // 固定周期控制环 (120 Hz)
 using var quit = new ManualResetEventSlim(false);
