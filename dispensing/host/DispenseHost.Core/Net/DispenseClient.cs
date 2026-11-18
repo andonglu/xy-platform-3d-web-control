@@ -66,6 +66,9 @@ public sealed class DispenseClient : IDisposable
     public event Action<PathPreviewDto>? OnPath;
     public event Action<AxisConfigDto[]>? OnConfigData;
     public event Action<ForbiddenZoneDto[]>? OnZones;
+    public event Action<ProgramInfoDto[]>? OnPrograms;   // program_list 应答
+
+    public sealed record ProgramInfoDto(int Id, string Name, int StepCount, int PointCount, DateTimeOffset SavedUtc);
 
     public bool IsConnected => _ws?.State == WebSocketState.Open;
     public MachineStateDto LastState { get; private set; } = MachineStateDto.Empty;
@@ -201,6 +204,20 @@ public sealed class DispenseClient : IDisposable
                     break;
                 }
 
+                case "programs":
+                {
+                    var list = new List<ProgramInfoDto>();
+                    foreach (var p in root.GetProperty("programs").EnumerateArray())
+                        list.Add(new ProgramInfoDto(
+                            p.GetProperty("id").GetInt32(),
+                            p.GetProperty("name").GetString() ?? "",
+                            p.TryGetProperty("stepCount", out var sc) ? sc.GetInt32() : 0,
+                            p.TryGetProperty("pointCount", out var pc) ? pc.GetInt32() : 0,
+                            p.TryGetProperty("savedUtc", out var su) && su.TryGetDateTimeOffset(out var dt) ? dt : DateTimeOffset.MinValue));
+                    OnPrograms?.Invoke(list.ToArray());
+                    break;
+                }
+
                 case "zones":
                 {
                     var list = new List<ForbiddenZoneDto>();
@@ -245,7 +262,12 @@ public sealed class DispenseClient : IDisposable
 
     // ---------------- 上传 ----------------
 
-    public sealed record UploadStep(string Kind, List<Point3D> Points, double Feed, bool ValveOn);
+    /// <summary>
+    /// 上传步骤: 每段独立进给/胶阀, 可选携带指令级出胶时序参数
+    /// (openDelayMs/earlyCloseMs/closeDelayMs/retractMm, 服务端 P1 起支持, 默认 0 = 原行为)。
+    /// </summary>
+    public sealed record UploadStep(string Kind, List<Point3D> Points, double Feed, bool ValveOn,
+        double OpenDelayMs = 0, double EarlyCloseMs = 0, double CloseDelayMs = 0, double RetractMm = 0);
 
     /// <summary>上传点胶路径 (沿用 CLI 接口, 统一进给速度)</summary>
     public async Task UploadPathsAsync(string jobName, List<List<Point3D>> paths, double feed = 80)
@@ -257,12 +279,21 @@ public sealed class DispenseClient : IDisposable
     {
         if (!IsConnected) { OnLog?.Invoke("未连接服务端，无法上传"); return; }
 
-        var payloadSteps = steps.Select(s => new
+        // 时序字段默认 0 不下发, 保持旧服务端兼容
+        var payloadSteps = steps.Select(s =>
         {
-            kind = s.Kind,
-            points = s.Points.Select(p => new[] { p.X, p.Y, p.Z }).ToArray(),
-            feed = s.Feed,
-            valveOn = s.ValveOn,
+            var dict = new Dictionary<string, object?>
+            {
+                ["kind"] = s.Kind,
+                ["points"] = s.Points.Select(p => new[] { p.X, p.Y, p.Z }).ToArray(),
+                ["feed"] = s.Feed,
+                ["valveOn"] = s.ValveOn,
+            };
+            if (s.OpenDelayMs > 0) dict["openDelayMs"] = s.OpenDelayMs;
+            if (s.EarlyCloseMs > 0) dict["earlyCloseMs"] = s.EarlyCloseMs;
+            if (s.CloseDelayMs > 0) dict["closeDelayMs"] = s.CloseDelayMs;
+            if (s.RetractMm > 0) dict["retractMm"] = s.RetractMm;
+            return dict;
         }).ToArray();
 
         var payload = JsonSerializer.Serialize(new { type = "upload", name = jobName, steps = payloadSteps }, JsonOpts);
@@ -306,6 +337,33 @@ public sealed class DispenseClient : IDisposable
 
     /// <summary>查询服务端轴配置</summary>
     public async Task GetConfigAsync() => await SendAsync(new { type = "get_config" });
+
+    // ---------------- 脱机程序 + 虚拟 IO (P3) ----------------
+
+    /// <summary>把当前步骤保存为脱机程序 (服务端原子落盘, 返回程序编号事件)</summary>
+    public async Task ProgramSaveAsync(string name, List<UploadStep> steps)
+    {
+        var payloadSteps = steps.Select(s => new
+        {
+            kind = s.Kind,
+            points = s.Points.Select(p => new[] { p.X, p.Y, p.Z }).ToArray(),
+            feed = s.Feed,
+            valveOn = s.ValveOn,
+            openDelayMs = s.OpenDelayMs,
+            earlyCloseMs = s.EarlyCloseMs,
+            closeDelayMs = s.CloseDelayMs,
+            retractMm = s.RetractMm,
+        }).ToArray();
+        await SendAsync(new { type = "program_save", name, steps = payloadSteps });
+        OnLog?.Invoke($"程序保存已发送: {name}");
+    }
+
+    public async Task ProgramListAsync() => await SendAsync(new { type = "program_list" });
+    public async Task ProgramLoadAsync(int id) => await SendAsync(new { type = "program_load", id });
+    public async Task ProgramRunAsync(int id) => await SendAsync(new { type = "program_run", id });
+    public async Task ProgramDeleteAsync(int id) => await SendAsync(new { type = "program_delete", id });
+    public async Task IoWriteAsync(string id, bool on) => await SendAsync(new { type = "io_write", id, on });
+    public async Task IoListAsync() => await SendAsync(new { type = "io_list" });
 
     private Task SendAsync(object msg) => SendTextAsync(JsonSerializer.Serialize(msg, JsonOpts));
 

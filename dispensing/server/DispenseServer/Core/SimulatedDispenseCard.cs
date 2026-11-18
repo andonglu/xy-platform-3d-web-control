@@ -29,12 +29,14 @@ public sealed class SimulatedDispenseCard : IDispenseAxisCard
         public const double SensorTolerance = 0.5; // mm, 传感器触发容差
     }
 
-    // 默认配置: X/Y 对称 ±150, Z 0~80, 零点在行程中间
+    // 默认配置: X/Y 对称 ±150, Z 0~80, 零点在行程中间; A/C 旋转轴单位为度 (P4)
     private readonly AxisSim[] _axes =
     [
         new AxisSim(new AxisConfig(-150, 150, 0, -148, 148, 0, 20)),   // X: 零点在 0, 负极限 -148, 正极限 +148
         new AxisSim(new AxisConfig(-150, 150, 0, -148, 148, 0, 20)),   // Y
         new AxisSim(new AxisConfig(0, 80, 40, 2, 78, 40, 15)),         // Z: 行程 0~80, 零点 40, 负极限 2, 正极限 78
+        new AxisSim(new AxisConfig(-110, 110, 0, -108, 108, 0, 30)),   // A: 摆头 -110°~+110°, 零点 0
+        new AxisSim(new AxisConfig(-180, 180, 0, -178, 178, 0, 45)),   // C: 回转 ±180°, 零点 0
     ];
 
     public void Initialize()

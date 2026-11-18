@@ -24,6 +24,7 @@ import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 let scene, camera, renderer, controls;
 let machineRoot = null;
 let yCarriage = null, xCarriage = null, zCarriage = null;
+let needleTilt = null;               // P4: 针头姿态组 (绕枢轴 = zCarriage 原点)
 let needleHead = null, needleTip = null, beamMesh = null;
 let sensorGroup = null, workspaceBox = null, labelsGroup = null;
 let trailPoints = [], trailLine = null;
@@ -307,18 +308,21 @@ function buildAxes(c, span, H) {
   slider.position.set(0, 24, -14);
   zCarriage.add(slider);
 
-  // 针头 (锥尖朝下, 尖端在局部 y=0 = 针尖)
+  // 针头 (锥尖朝下, 尖端在局部 y=0 = 针尖); P4: 包进 needleTilt 姿态组, 绕枢轴偏摆
+  needleTilt = new THREE.Group();
+  zCarriage.add(needleTilt);
+
   needleHead = new THREE.Mesh(new THREE.ConeGeometry(6, 20, 12), MAT.needle);
   needleHead.rotation.x = Math.PI;   // 尖端朝下
   needleHead.position.set(0, 10, 0);
-  zCarriage.add(needleHead);
+  needleTilt.add(needleHead);
 
   // 针尖 (发光点, 局部原点 = 世界 (x, z, y))
   needleTip = new THREE.Mesh(new THREE.SphereGeometry(2, 10, 10), MAT.tip);
   needleTip.position.set(0, 0, 0);
-  zCarriage.add(needleTip);
+  needleTilt.add(needleTip);
 
-  // 胶束 (针尖到台面, 长度动态)
+  // 胶束 (针尖到台面, 长度动态; 五轴姿态下隐藏 —— 胶束实际沿针尖流下)
   beamMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 1, 8), MAT.glue);
   beamMesh.position.set(0, -0.5, 0);
   beamMesh.scale.y = 1;
@@ -449,29 +453,50 @@ export function setVisibility(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// 实时更新三轴位置 (由服务端 state 驱动, 经主循环平滑插值)
+// 实时更新轴位置 (由服务端 state 驱动, 经主循环平滑插值)
+// P4 五轴: a/c 为枢轴姿态角(度), toolLen 为工具长度; 针尖 = 枢轴 + 工具方向×L
 // ---------------------------------------------------------------------------
-export function updatePositions(x, y, z, valveOn) {
+const _needleDown = new THREE.Vector3(0, -1, 0);
+
+export function updatePositions(x, y, z, valveOn, aDeg = 0, cDeg = 0, toolLen = 60) {
   if (!yCarriage || !xCarriage || !zCarriage) return;
 
-  // 三轴联动: 只需设置三个滑座的位置, 针尖自动跟随
+  // 三轴联动: 设置三个滑座位置 (五轴时滑座 = 枢轴)
   yCarriage.position.z = y;             // 龙门 / 移动台面沿 Y
   xCarriage.position.x = x;             // X 滑座沿横梁移动
   zCarriage.position.y = z - machineConfig.gantryHeight;  // Z 滑座上下
 
-  // 胶束: 从针尖延伸到台面, 长度 = 针尖高度
+  // P4: 针头姿态 —— 机器坐标工具方向 t = (−sinA·sinC, sinA·cosC, −cosA) (A=0 竖直向下)
+  // three.js (X,Y,Z) = 机器 (x, z, y); 针为旋转对称体, 用 setFromUnitVectors 免手性烦恼
+  let tip = new THREE.Vector3(x, z, y);          // 默认竖直: 针尖=枢轴投影
+  if (needleTilt) {
+    const ar = (aDeg * Math.PI) / 180, cr = (cDeg * Math.PI) / 180;
+    const sA = Math.sin(ar);
+    const dir = new THREE.Vector3(
+      -sA * Math.sin(cr),  // three.X = 机器 x
+      -Math.cos(ar),       // three.Y = 机器 z
+      sA * Math.cos(cr),   // three.Z = 机器 y
+    );
+    needleTilt.quaternion.setFromUnitVectors(_needleDown, dir);
+    tip = new THREE.Vector3(
+      x + dir.x * toolLen,
+      z + dir.y * toolLen,
+      y + dir.z * toolLen,
+    );
+  }
+
+  // 胶束: 从针尖延伸到台面, 长度 = 针尖高度 (五轴姿态下隐藏)
   if (beamMesh) {
     const len = Math.max(z, 0.1);
     beamMesh.scale.y = len;
     beamMesh.position.y = -len / 2;
-    beamMesh.visible = valveOn && z > 0.5;
+    beamMesh.visible = valveOn && z > 0.5 && Math.abs(aDeg) < 0.5;
   }
 
-  // 胶路轨迹: 记录针尖位置 (世界坐标 x, z, y), 距离阈值去重
+  // 胶路轨迹: 记录针尖实际位置 (TCP), 距离阈值去重
   if (valveOn) {
-    const p = new THREE.Vector3(x, z, y);
-    if (trailPoints.length === 0 || p.distanceTo(trailPoints[trailPoints.length - 1]) > 0.6) {
-      trailPoints.push(p);
+    if (trailPoints.length === 0 || tip.distanceTo(trailPoints[trailPoints.length - 1]) > 0.6) {
+      trailPoints.push(tip);
       if (trailPoints.length > 20000) trailPoints.shift();
       updateTrailLine();
     }

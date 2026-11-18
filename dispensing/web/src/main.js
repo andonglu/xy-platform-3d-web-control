@@ -18,8 +18,8 @@ const container = document.getElementById('canvas-container');
 initScene(container);
 
 // 状态缓存 (用于平滑插值)
-let targetState = { x: 0, y: 0, z: 0, valve: false, collision: false };
-let displayState = { x: 0, y: 0, z: 0, valve: false };
+let targetState = { x: 0, y: 0, z: 0, a: 0, c: 0, toolLen: 60, valve: false, collision: false };
+let displayState = { x: 0, y: 0, z: 0, a: 0, c: 0, toolLen: 60, valve: false };
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,6 +30,9 @@ connect(
       x: state.x?.pos ?? 0,
       y: state.y?.pos ?? 0,
       z: state.z?.pos ?? 0,
+      a: state.a?.pos ?? 0,
+      c: state.c?.pos ?? 0,
+      toolLen: state.rtcp?.toolLength ?? 60,
       valve: state.valve ?? false,
       collision: state.collision ?? false,
     };
@@ -297,7 +300,11 @@ function animate() {
   displayState.x += (targetState.x - displayState.x) * alpha;
   displayState.y += (targetState.y - displayState.y) * alpha;
   displayState.z += (targetState.z - displayState.z) * alpha;
+  displayState.a += (targetState.a - displayState.a) * alpha;
+  displayState.c += (targetState.c - displayState.c) * alpha;
+  displayState.toolLen = targetState.toolLen;
   displayState.valve = targetState.valve;
-  updatePositions(displayState.x, displayState.y, displayState.z, displayState.valve);
+  updatePositions(displayState.x, displayState.y, displayState.z, displayState.valve,
+    displayState.a, displayState.c, displayState.toolLen);
 }
 animate();

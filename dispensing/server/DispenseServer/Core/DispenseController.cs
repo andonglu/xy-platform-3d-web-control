@@ -35,12 +35,18 @@ public sealed class DispenseController
         public List<I3DPath> CurrentSegs = new();
         public int SubIdx;
         public double SubS, SubTotal;
-        public enum Phase { PtpStart, Descend, Dispensing, Ascending, Done }
+        public ValveTiming Timing;          // 当前段的出胶时序参数
+        public double PhaseTimer;           // OpenDelay / CloseDelay 相计时
+        public bool ValveClosedEarly;       // 提前关胶是否已触发
+        public List<Point3D[]>? SegmentNormals;  // P4: 当前段各子段的起/终点法向
+        public double LastA, LastC;              // P4: 上一插补周期的 A/C 角 (角速度估算)
+        public bool RtcpWarned, AxisLimitWarned; // P4: 单次告警锁
+        public enum Phase { PtpStart, Descend, OpenDelay, Dispensing, CloseDelay, Ascending, Done }
         public Phase CurrentPhase = Phase.PtpStart;
         public Point3D StartPoint;
     }
     private RunState? _run;
-    private readonly int[] _jogDir = new int[3];
+    private readonly int[] _jogDir = new int[Axes.Count];
     private bool _homing;
     private int _homeDoneCount;
     private double _t, _emitAcc;
@@ -51,7 +57,52 @@ public sealed class DispenseController
 
     private const double PenDownZ = 8;   // 点胶工作高度
     private const double PenUpZ = 30;    // 安全高度
-    private const double MaxAccel = 600; // mm/s²
+    private const double MaxAccel = 600; // mm/s² (点胶路径插补加减速)
+
+    // ---- 出胶时序诊断 (供验证程序与 UI 读取) ----
+    /// <summary>最近一次关阀时距路径终点的剩余弧长 (mm); -1 表示本轮未发生关阀</summary>
+    public double LastValveOffRemaining { get; private set; } = -1;
+    /// <summary>最近一次关阀时的插补速度 (mm/s)</summary>
+    public double LastValveOffVelocity { get; private set; }
+
+    // ---- P4: 五轴 RTCP 运动学 ----
+    /// <summary>控制器名义运动学模型 (RTCP 逆解用; 标定后逼近真实几何)</summary>
+    public FiveAxisKinematics Kinematics { get; } = new();
+    /// <summary>真实机床几何 (模拟物理世界的"真值", 出厂带误差; 验证程序以此计算实际 TCP)</summary>
+    public FiveAxisKinematics RealGeometry { get; } = new()
+    {
+        // 出厂误差: A 轴轴线偏 0.9°, C 轴偏 0.7°, 枢轴偏移 (0.3, -0.2, 0.15)mm
+        AxisA = FiveAxisKinematics.Rotate(new Point3D(1, 0, 0), new Point3D(0, 0, 1), 0.9 * Math.PI / 180),
+        AxisC = FiveAxisKinematics.Rotate(new Point3D(0, 0, 1), new Point3D(1, 0, 0), -0.7 * Math.PI / 180),
+        PivotError = new Point3D(0.3, -0.2, 0.15),
+    };
+    public bool RtcpEnabled { get; private set; }
+    public double LastCalibResidual { get; private set; } = -1;
+
+    /// <summary>RTCP 开关: 开=带法向路径按五轴联动 (TCP 轨迹编程); 关=按三轴直线执行</summary>
+    public void SetRtcp(bool on)
+    {
+        if (_run is not null) { OnEvent?.Invoke("warn", "作业运行中无法切换 RTCP"); return; }
+        RtcpEnabled = on;
+        OnEvent?.Invoke("ok", on ? "RTCP 已开启 (五轴联动, TCP 轨迹控制)" : "RTCP 已关闭 (三轴直线插补)");
+    }
+
+    /// <summary>
+    /// RTCP 标定: 真实机床 (RealGeometry) 作为测量源, 双高度差分探测 + 高斯-牛顿
+    /// 拟合 A/C 轴线误差与枢轴误差, 写回名义模型 Kinematics。
+    /// 标定后编程 TCP 轨迹与实际 TCP 的系统性偏离消除。
+    /// </summary>
+    public void CalibrateRtcp()
+    {
+        if (_run is not null) { OnEvent?.Invoke("error", "作业运行中无法标定"); return; }
+        // 探针前先让旋转轴归零, 模拟真实标定流程
+        for (int i = 0; i < Axes.Count; i++) { _jogDir[i] = 0; _card.SetTarget(i, 0, 60); }
+        double res = Kinematics.Calibrate((pivot, aDeg, cDeg) => RealGeometry.Forward(pivot, aDeg, cDeg));
+        LastCalibResidual = res;
+        OnEvent?.Invoke("ok", $"RTCP 标定完成: 轴线/枢轴误差已修正, 残差 {res:F4}mm " +
+                              $"(A轴=[{Kinematics.AxisA.X:F4},{Kinematics.AxisA.Y:F4},{Kinematics.AxisA.Z:F4}], " +
+                              $"C轴=[{Kinematics.AxisC.X:F4},{Kinematics.AxisC.Y:F4},{Kinematics.AxisC.Z:F4}])");
+    }
 
     public DispenseController(IDispenseAxisCard card, CollisionChecker collision, I3DInterpolationEngine engine)
     {
@@ -94,13 +145,13 @@ public sealed class DispenseController
         }
         _run = null;
         _homeDoneCount = 0;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < Axes.Count; i++)
         {
             _jogDir[i] = 0;
             _card.StartHome(i);
         }
         _homing = true;
-        OnEvent?.Invoke("ok", "回零开始: 三轴朝零点开关运动");
+        OnEvent?.Invoke("ok", "回零开始: 五轴朝零点开关运动");
     }
 
     public void Ptp(int axis, double pos)
@@ -142,9 +193,26 @@ public sealed class DispenseController
     public void UploadPaths(List<DispensePath3D> paths, List<double[]> preview, string name)
     {
         _run = new RunState { Paths = paths, StartPoint = GetFirstPoint(paths) };
+        CurrentJobName = name;
         OnPath?.Invoke(new { type = "path", name, points3d = preview });
         OnEvent?.Invoke("ok", $"路径已上传: {paths.Count} 段, 总长 {paths.Sum(p => p.Segments.Sum(s => s.Length)):F1}mm");
     }
+
+    /// <summary>当前装载的作业名 (脱机程序运行/上传时更新)</summary>
+    public string? CurrentJobName { get; private set; }
+
+    /// <summary>是否有作业在运行 (IO/上位机互锁用)</summary>
+    public bool IsRunning => _run is not null;
+
+    /// <summary>任一轴处于 Faulted (IO 报警灯: 撞机报警或急停停轴都算故障)</summary>
+    public bool AnyAxisFaulted => Enumerable.Range(0, Axes.Count).Any(i => _card.Read(i).State == AxisState.Faulted);
+
+    /// <summary>附加虚拟 IO 层 (脱机面板/PLC 模拟); 附加后 Tick 驱动其扫描, 状态包携带 io 字段</summary>
+    public IoController? Io { get; private set; }
+    public void AttachIo(IoController io) => Io = io;
+
+    /// <summary>内部事件通道 (供 IO 层等内部模块上报)</summary>
+    public void ReportEvent(string level, string msg) => OnEvent?.Invoke(level, msg);
 
     /// <summary>开始执行已上传的路径</summary>
     public void RunJob()
@@ -169,6 +237,11 @@ public sealed class DispenseController
         r.SegIdx = 0;
         r.S = 0; r.V = 0;
         r.SubIdx = 0; r.SubS = 0;
+        r.Timing = ValveTiming.Zero;
+        r.PhaseTimer = 0;
+        r.ValveClosedEarly = false;
+        LastValveOffRemaining = -1;
+        LastValveOffVelocity = 0;
 
         // PTP 到第一段起点
         var first = r.Paths[0];
@@ -218,7 +291,7 @@ public sealed class DispenseController
     public List<AxisConfig> GetConfigs()
     {
         var list = new List<AxisConfig>();
-        for (int i = 0; i < 3; i++) list.Add(_card.GetConfig(i));
+        for (int i = 0; i < Axes.Count; i++) list.Add(_card.GetConfig(i));
         return list;
     }
 
@@ -237,6 +310,7 @@ public sealed class DispenseController
         TickJog(dt);
         TickRun(dt);
         _card.Tick(dt);
+        Io?.Tick(dt);
 
         // 撞机检测 (每周期), 只在非报警时检测
         if (!CollisionAlarm)
@@ -252,7 +326,7 @@ public sealed class DispenseController
         // 传感器极限触发检测 (轴卡自身的极限传感器, 独立于 CollisionChecker)
         if (!CollisionAlarm)
         {
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < Axes.Count; i++)
             {
                 var st = _card.Read(i);
                 var sen = _card.ReadSensors(i);
@@ -274,18 +348,18 @@ public sealed class DispenseController
         if (_homing)
         {
             int doneCount = 0;
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < Axes.Count; i++)
             {
                 var st = _card.Read(i);
                 if (st.State != AxisState.Homing && st.State != AxisState.Moving)
                     doneCount++;
             }
-            if (doneCount == 3)
+            if (doneCount == Axes.Count)
             {
                 _homing = false;
                 // 检查是否有轴回零失败 (Faulted)
                 bool anyFaulted = false;
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < Axes.Count; i++)
                 {
                     if (_card.Read(i).State == AxisState.Faulted)
                     {
@@ -294,7 +368,7 @@ public sealed class DispenseController
                     }
                 }
                 if (!anyFaulted)
-                    OnEvent?.Invoke("ok", "回零完成, 三轴已在零点位置");
+                    OnEvent?.Invoke("ok", "回零完成, 五轴已在零点位置");
             }
         }
 
@@ -309,7 +383,7 @@ public sealed class DispenseController
     private void TickJog(double dt)
     {
         if (_run is not null || _homing) return;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < Axes.Count; i++)
         {
             if (_jogDir[i] == 0) continue;
             var st = _card.Read(i);
@@ -336,27 +410,51 @@ public sealed class DispenseController
         {
             case RunState.Phase.PtpStart:
                 // 等待 PTP 到位 (XY 到起点, Z 在安全高度)
-                if (Enumerable.Range(0, 3).Any(i => _card.Read(i).State == AxisState.Moving)) return;
-                // 下降到工作高度
-                _card.SetTarget(Axes.Z, PenDownZ, 40);
+                if (Enumerable.Range(0, Axes.Count).Any(i => _card.Read(i).State == AxisState.Moving)) return;
+                // 下降到该段起点的工作高度 (分层 3D 路径时各层 Z 不同, 不再固定 PenDownZ)
+                double workZ = r.Paths[r.SegIdx].Segments[0].PointAt(0).Z;
+                _card.SetTarget(Axes.Z, workZ, 40);
+                // P4 五轴: 带法向的段在下降同时预摆 A/C 到起点姿态 (RTCP 开时)
+                var segNormals0 = r.Paths[r.SegIdx].SegmentNormals;
+                if (segNormals0 is not null && RtcpEnabled)
+                {
+                    var sol = Kinematics.SolveTcp(r.Paths[r.SegIdx].Segments[0].PointAt(0), segNormals0[0][0]);
+                    _card.SetTarget(Axes.A, sol.aDeg, 90);
+                    _card.SetTarget(Axes.C, sol.cDeg, 120);
+                }
                 r.CurrentPhase = RunState.Phase.Descend;
                 break;
 
             case RunState.Phase.Descend:
-                if (_card.Read(Axes.Z).State == AxisState.Moving) return;
-                // 开胶
-                ValveOn = r.Paths[r.SegIdx].DispenseOn;
-                r.CurrentSegs = r.Paths[r.SegIdx].Segments;
-                r.Total = r.CurrentSegs.Sum(s => s.Length);
-                r.S = 0; r.V = 0;
-                r.SubIdx = 0; r.SubS = 0;
-                r.SubTotal = r.CurrentSegs[0].Length;
-                r.Feed = r.Paths[r.SegIdx].Feed;
-                r.CurrentPhase = RunState.Phase.Dispensing;
+                if (Enumerable.Range(0, Axes.Count).Any(i => _card.Read(i).State == AxisState.Moving)) return;
+                // 装载本段出胶时序参数, 再决定直接开胶还是先等开阀延时
+                r.Timing = r.Paths[r.SegIdx].Timing;
+                r.ValveClosedEarly = false;
+                r.PhaseTimer = 0;
+                if (r.Timing.HasOpenDelay)
+                {
+                    r.CurrentPhase = RunState.Phase.OpenDelay;
+                }
+                else
+                {
+                    BeginDispensing(r);
+                }
+                break;
+
+            case RunState.Phase.OpenDelay:
+                // 开阀延时: 等胶路充满针头, 防止起点缺胶
+                r.PhaseTimer += dt;
+                if (r.PhaseTimer >= r.Timing.OpenDelaySec) BeginDispensing(r);
                 break;
 
             case RunState.Phase.Dispensing:
                 TickDispensing(r, dt);
+                break;
+
+            case RunState.Phase.CloseDelay:
+                // 关胶保持: 等回吸完成再抬枪, 防拖尾
+                r.PhaseTimer += dt;
+                if (r.PhaseTimer >= r.Timing.CloseDelaySec) BeginAscend(r);
                 break;
 
             case RunState.Phase.Ascending:
@@ -381,6 +479,31 @@ public sealed class DispenseController
         }
     }
 
+    /// <summary>开胶并进入路径插补 (Descend/OpenDelay 相的汇合点)</summary>
+    private void BeginDispensing(RunState r)
+    {
+        ValveOn = r.Paths[r.SegIdx].DispenseOn;
+        r.CurrentSegs = r.Paths[r.SegIdx].Segments;
+        r.Total = r.CurrentSegs.Sum(s => s.Length);
+        r.S = 0; r.V = 0;
+        r.SubIdx = 0; r.SubS = 0;
+        r.SubTotal = r.CurrentSegs[0].Length;
+        r.Feed = r.Paths[r.SegIdx].Feed;
+        r.SegmentNormals = r.Paths[r.SegIdx].SegmentNormals;
+        r.RtcpWarned = false;
+        r.AxisLimitWarned = false;
+        r.LastA = _card.Read(Axes.A).Pos;
+        r.LastC = _card.Read(Axes.C).Pos;
+        r.CurrentPhase = RunState.Phase.Dispensing;
+    }
+
+    /// <summary>抬枪: 安全高度 + 该段退枪高度 (RetractMm)</summary>
+    private void BeginAscend(RunState r)
+    {
+        _card.SetTarget(Axes.Z, PenUpZ + r.Timing.RetractMm, 60);
+        r.CurrentPhase = RunState.Phase.Ascending;
+    }
+
     private void TickDispensing(RunState r, double dt)
     {
         // 梯形速度规划 (减速距离约束)
@@ -391,6 +514,30 @@ public sealed class DispenseController
         r.V += Math.Clamp(vWant - r.V, -dv, dv);
         r.S += r.V * dt;
         r.SubS += r.V * dt;
+
+        // 提前关胶: 剩余弧长 ≤ 胶尾长度 时关阀, 保证胶路末端恰好到终点、不堆胶。
+        // 胶尾 = 关阀后针头在胶水继续流出的时间 t 内移动的距离, 两种工况:
+        //   ① t 秒内未停止 (v/a > t): 胶尾 = v·t - ½·a·t²   (匀减速段)
+        //   ② t 秒内已停止 (v/a ≤ t): 胶尾 = v²/(2a)        (制动距离;
+        //      停车后剩余胶量堆积在终点, 胶尾不再增长)
+        // 注意不能用 min/max 统一 —— 必须按时停/未停分档, 否则低进给时
+        // (v·t-½at² < 制动距离) 会判成"胶尾过短"而永远不到关阀点。
+        if (ValveOn && r.Timing.HasEarlyClose)
+        {
+            double t = r.Timing.EarlyCloseSec;
+            double stopTime = r.V / MaxAccel;
+            double stopDist = stopTime <= t
+                ? r.V * r.V / (2 * MaxAccel)
+                : Math.Max(0, r.V * t - 0.5 * MaxAccel * t * t);
+            double remaining = r.Total - r.S;
+            if (remaining <= stopDist)
+            {
+                ValveOn = false;
+                r.ValveClosedEarly = true;
+                LastValveOffRemaining = remaining;
+                LastValveOffVelocity = r.V;
+            }
+        }
 
         // 在当前子段内取插补点
         while (r.SubS > r.SubTotal && r.SubIdx < r.CurrentSegs.Count - 1)
@@ -403,17 +550,61 @@ public sealed class DispenseController
         double localS = Math.Min(r.SubS, r.SubTotal);
         var pt = r.CurrentSegs[r.SubIdx].PointAt(localS);
 
-        _card.SetPosition(Axes.X, pt.X, r.V);
-        _card.SetPosition(Axes.Y, pt.Y, r.V);
-        _card.SetPosition(Axes.Z, pt.Z, r.V);
+        if (r.SegmentNormals is not null && RtcpEnabled)
+        {
+            // P4 RTCP 五轴联动: 插补点 + 插值法向 → 逆解出枢轴位置与 A/C 角
+            var nn = r.SegmentNormals[r.SubIdx];
+            double frac = r.SubTotal <= 0 ? 0 : Math.Min(r.SubS / r.SubTotal, 1);
+            var n = (nn[0] + (nn[1] - nn[0]) * frac).Normalize();
+            var sol = Kinematics.SolveTcp(pt, n);
+            double safeDt = Math.Max(dt, 1e-6);
+            double angVelA = Math.Abs(sol.aDeg - r.LastA) / safeDt;
+            double angVelC = Math.Abs(sol.cDeg - r.LastC) / safeDt;
+            r.LastA = sol.aDeg; r.LastC = sol.cDeg;
+            var (aMin, aMax) = _card.GetLimit(Axes.A);
+            var (cMin, cMax) = _card.GetLimit(Axes.C);
+            if (!r.AxisLimitWarned && (sol.aDeg < aMin || sol.aDeg > aMax || sol.cDeg < cMin || sol.cDeg > cMax))
+            {
+                r.AxisLimitWarned = true;
+                OnEvent?.Invoke("warn", $"A/C 角 ({sol.aDeg:F1}°, {sol.cDeg:F1}°) 超出行程 [{aMin}~{aMax}]/[{cMin}~{cMax}], 已限位, TCP 将偏离轨迹");
+            }
+            _card.SetPosition(Axes.X, sol.pivot.X, r.V);
+            _card.SetPosition(Axes.Y, sol.pivot.Y, r.V);
+            _card.SetPosition(Axes.Z, sol.pivot.Z, r.V);
+            _card.SetPosition(Axes.A, sol.aDeg, angVelA);
+            _card.SetPosition(Axes.C, sol.cDeg, angVelC);
+        }
+        else
+        {
+            if (r.SegmentNormals is not null && !r.RtcpWarned)
+            {
+                r.RtcpWarned = true;
+                OnEvent?.Invoke("warn", "路径含曲面法向但 RTCP 未开启, 按三轴直线执行 (姿态不控制)");
+            }
+            _card.SetPosition(Axes.X, pt.X, r.V);
+            _card.SetPosition(Axes.Y, pt.Y, r.V);
+            _card.SetPosition(Axes.Z, pt.Z, r.V);
+        }
 
         if (r.S >= r.Total)
         {
             r.V = 0;
-            ValveOn = false;
-            // 抬升到安全高度
-            _card.SetTarget(Axes.Z, PenUpZ, 60);
-            r.CurrentPhase = RunState.Phase.Ascending;
+            if (ValveOn)
+            {
+                ValveOn = false;
+                LastValveOffRemaining = 0;
+                LastValveOffVelocity = 0;
+            }
+            // 关胶保持 (回吸完成) 后再抬枪
+            r.PhaseTimer = 0;
+            if (r.Timing.HasCloseDelay)
+            {
+                r.CurrentPhase = RunState.Phase.CloseDelay;
+            }
+            else
+            {
+                BeginAscend(r);
+            }
         }
     }
 
@@ -422,11 +613,15 @@ public sealed class DispenseController
         var sx = _card.Read(Axes.X);
         var sy = _card.Read(Axes.Y);
         var sz = _card.Read(Axes.Z);
+        var sa = _card.Read(Axes.A);
+        var sc = _card.Read(Axes.C);
 
         // 传感器信号
         var senX = _card.ReadSensors(Axes.X);
         var senY = _card.ReadSensors(Axes.Y);
         var senZ = _card.ReadSensors(Axes.Z);
+        var senA = _card.ReadSensors(Axes.A);
+        var senC = _card.ReadSensors(Axes.C);
 
         object Pack(AxisStatus s, SensorState sen) => new
         {
@@ -436,6 +631,19 @@ public sealed class DispenseController
             sensors = new { home = sen.Home, limPos = sen.LimitPositive, limNeg = sen.LimitNegative },
         };
 
+        // 虚拟 IO 状态 (附加后才有; 脱机面板/PLC 模拟)
+        object? io = Io is null ? null : new
+        {
+            start = Io.InStart,
+            pause = Io.InPause,
+            reset = Io.InReset,
+            selectBcd = Io.SelectBcd,
+            running = Io.State().Running,
+            done = Io.State().Done,
+            error = Io.State().Error,
+            valve = Io.State().Valve,
+        };
+
         return new
         {
             type = "state",
@@ -443,11 +651,22 @@ public sealed class DispenseController
             x = Pack(sx, senX),
             y = Pack(sy, senY),
             z = Pack(sz, senZ),
+            a = Pack(sa, senA),
+            c = Pack(sc, senC),
             valve = ValveOn,
             mode = _run is not null ? $"Dispense:{_run.CurrentPhase}" : (_homing ? "Homing" : "Idle"),
+            job = CurrentJobName,
+            rtcp = new
+            {
+                enabled = RtcpEnabled,
+                calibrated = Kinematics.Calibrated,
+                residualMm = LastCalibResidual,
+                toolLength = Kinematics.ToolLength,
+            },
             collision = CollisionAlarm,
             collisionMsg = CollisionMessage ?? "",
             homing = _homing,
+            io,
         };
     }
 }

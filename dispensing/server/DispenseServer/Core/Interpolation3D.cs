@@ -70,7 +70,10 @@ public sealed class Arc3DPath : I3DPath
         _center = p0 + uN * centerX + vN * centerY;
         _radius = Math.Sqrt(centerX * centerX + centerY * centerY);
 
-        _a0 = Math.Atan2(centerY, centerX); // p0 angle in local
+        // p0 在局部坐标原点, 相对圆心的角度 = atan2(-centerY, -centerX)
+        // (注意: 不能对圆心坐标本身取 atan2 —— 那是圆心相对原点的方向, 会导致
+        //  对称三点时 sweep 退化成整圆)
+        _a0 = Math.Atan2(-centerY, -centerX); // p0 angle (rel. center) in local
         // p2 angle in local:
         double p2lx = cx - centerX, p2ly = cy - centerY;
         _a1 = Math.Atan2(p2ly, p2lx);

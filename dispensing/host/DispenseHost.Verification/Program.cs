@@ -1,0 +1,248 @@
+using DispenseHost.CadImport;
+using DispenseHost.Net;
+using DispenseHost.PathPlan;
+using DispenseServer.Core;
+using DispenseServer.Collision;
+using HostPoint = DispenseHost.CadImport.Point3D;
+
+// ---------------------------------------------------------------------------
+// P2 验证: DXF 导入 + 多 Z 分层切片 + 程序装配 + 服务端全链路执行
+//   [1] DXF 解析几何正确性 (LINE/CIRCLE/ARC/LWPOLYLINE)
+//   [2] 圆锥网格分层切片 (Z 越高半径越小)
+//   [3] 全链路: DXF + 分层路径 → JobAssembler → DispenseServer 控制器 → 出胶轨迹落在轮廓上
+// ---------------------------------------------------------------------------
+
+int failures = 0;
+void Check(bool cond, string name, string detail = "")
+{
+    Console.WriteLine($"  {(cond ? "PASS" : "FAIL")}  {name}{(detail.Length > 0 ? $"  ({detail})" : "")}");
+    if (!cond) failures++;
+}
+
+// ---------------- Test 1: DXF 解析 ----------------
+Console.WriteLine("[1] DXF 解析 (LINE / CIRCLE / ARC / LWPOLYLINE)");
+const string dxf = """
+0
+SECTION
+2
+ENTITIES
+0
+LINE
+8
+0
+10
+0.0
+20
+0.0
+30
+5.0
+11
+100.0
+21
+0.0
+31
+5.0
+0
+CIRCLE
+8
+TOP
+10
+50.0
+20
+0.0
+40
+20.0
+0
+ARC
+8
+TOP
+10
+-50.0
+20
+0.0
+40
+20.0
+50
+0.0
+51
+180.0
+0
+LWPOLYLINE
+8
+0
+90
+4
+70
+1
+10
+0.0
+20
+0.0
+10
+10.0
+20
+0.0
+10
+10.0
+20
+10.0
+10
+0.0
+20
+10.0
+0
+ENDSEC
+0
+EOF
+""";
+{
+    int skipped = -1;
+    var paths = DxfImporter.Import(new StringReader(dxf), new DxfImportOptions
+    {
+        DefaultZ = 8,
+        LayerZ = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase) { ["TOP"] = 12.0 },
+        OnSkipped = n => skipped = n,
+    });
+    Check(paths.Count == 4, "entity count = 4", $"实际 {paths.Count}");
+
+    var line = paths[0];
+    Check(line.Layer == "0" && !line.IsClosed && line.Points.Count == 2
+          && Math.Abs(line.Points[1].X - 100) < 1e-6 && Math.Abs(line.Points[0].Z - 5) < 1e-6,
+        "LINE 端点与 Z", $"({line.Points[1].X:F1}, Z={line.Points[0].Z:F1})");
+
+    var circle = paths[1];
+    double rMin = circle.Points.Min(p => Math.Sqrt((p.X - 50) * (p.X - 50) + p.Y * p.Y));
+    double rMax = circle.Points.Max(p => Math.Sqrt((p.X - 50) * (p.X - 50) + p.Y * p.Y));
+    Check(circle.IsClosed && Math.Abs(rMin - 20) < 0.2 && Math.Abs(rMax - 20) < 0.2
+          && Math.Abs(circle.Points[0].Z - 12) < 1e-6,
+        "CIRCLE r=20 @图层TOP Z=12", $"r∈[{rMin:F2},{rMax:F2}], Z={circle.Points[0].Z:F1}, 点={circle.Points.Count}");
+
+    var arc = paths[2];
+    double rMinA = arc.Points.Min(p => Math.Sqrt((p.X + 50) * (p.X + 50) + p.Y * p.Y));
+    double rMaxA = arc.Points.Max(p => Math.Sqrt((p.X + 50) * (p.X + 50) + p.Y * p.Y));
+    var midA = arc.Points[arc.Points.Count / 2];
+    Check(!arc.IsClosed && Math.Abs(rMinA - 20) < 0.2 && Math.Abs(rMaxA - 20) < 0.2
+          && Math.Abs(midA.Y - 20) < 0.5 && Math.Abs(midA.X + 50) < 0.5,
+        "ARC 0→180° 上半圆", $"中点({midA.X:F1},{midA.Y:F1})");
+
+    var pl = paths[3];
+    Check(pl.IsClosed && pl.Points.Count == 5
+          && pl.Points[0] == pl.Points[^1]
+          && Math.Abs(pl.Points[2].Y - 10) < 1e-6 && Math.Abs(pl.Points[0].Z - 8) < 1e-6,
+        "LWPOLYLINE 闭合方形 0→10", $"点={pl.Points.Count}");
+    Check(skipped == 0, "无跳过实体");
+}
+
+// ---------------- Test 2: 多 Z 分层切片 ----------------
+Console.WriteLine("[2] 圆锥网格多 Z 分层切片 (Z↑ → 半径↓)");
+static Mesh MakeCone(double r, double h, int n = 32)
+{
+    var mesh = new Mesh();
+    var apex = new HostPoint(0, 0, h);
+    var rim = Enumerable.Range(0, n).Select(i =>
+    {
+        double a = 2 * Math.PI * i / n;
+        return new HostPoint(r * Math.Cos(a), r * Math.Sin(a), 0);
+    }).ToArray();
+    var down = new HostPoint(0, 0, -1);
+    for (int i = 0; i < n; i++)
+    {
+        var a = rim[i];
+        var b = rim[(i + 1) % n];
+        mesh.Triangles.Add(new Triangle(down, new HostPoint(0, 0, 0), b, a));
+        var normal = HostPoint.Cross(b - apex, a - apex).Normalize();
+        mesh.Triangles.Add(new Triangle(normal, apex, a, b));
+    }
+    return mesh;
+}
+
+List<(double Z, List<List<HostPoint>> Chains)> layers;
+{
+    var cone = MakeCone(r: 40, h: 40);
+    var gen = new PathGenerator();
+    layers = gen.GenerateLayeredSlice(cone, zStart: 10, zEnd: 30, dz: 10);
+    Check(layers.Count == 3, "层数 = 3", $"实际 {layers.Count}");
+    double[] expectR = [30, 20, 10];
+    for (int i = 0; i < layers.Count; i++)
+    {
+        var (z, chains) = layers[i];
+        double maxR = chains.SelectMany(c => c).Max(p => Math.Sqrt(p.X * p.X + p.Y * p.Y));
+        bool zOk = chains.SelectMany(c => c).All(p => Math.Abs(p.Z - z) < 1e-6);
+        Check(chains.Count >= 1 && zOk && Math.Abs(maxR - expectR[i]) < 0.5,
+            $"层 Z={z:F0}: 单闭合轮廓 r≈{expectR[i]}", $"{chains.Count} 条, maxR={maxR:F2}, 点数 {chains.Sum(c => c.Count)}");
+    }
+}
+
+// ---------------- Test 3: 全链路 (装配 → 服务端执行) ----------------
+Console.WriteLine("[3] 全链路: DXF + 分层切片 → JobAssembler → DispenseServer 执行");
+{
+    var card = new SimulatedDispenseCard();
+    var ctl = new DispenseController(card, new CollisionChecker(card), new DefaultInterpolationEngine());
+
+    // 装配: DXF 圆 (图层 TOP → Z=12) + 圆锥三层切片, 统一附 P1 时序 (提前关胶 200ms)
+    var dxfEntities = DxfImporter.Import(new StringReader(dxf), new DxfImportOptions
+    {
+        LayerZ = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase) { ["TOP"] = 12.0 },
+    });
+    var circleOnly = dxfEntities
+        .Where(e => e.IsClosed && Math.Abs(e.Points[0].Z - 12) < 1e-6).ToList();
+    var steps = new List<DispenseClient.UploadStep>();
+    steps.AddRange(JobAssembler.Assemble(circleOnly, feed: 100));
+    steps.AddRange(JobAssembler.Assemble(layers, feed: 80,
+        timing: new DispenseTiming(EarlyCloseMs: 200, CloseDelayMs: 100, RetractMm: 3)));
+
+    // 上传并执行 (直接调用控制器, 不经过 WebSocket)
+    var dtoSteps = steps.Select(s => new JobStepDto(
+        Kind: s.Kind,
+        Target: null,
+        Points: s.Points.Select(p => new[] { p.X, p.Y, p.Z }).ToArray(),
+        ArcVia: null,
+        Feed: s.Feed,
+        ValveOn: s.ValveOn,
+        DwellMs: 0,
+        OpenDelayMs: s.OpenDelayMs,
+        EarlyCloseMs: s.EarlyCloseMs,
+        CloseDelayMs: s.CloseDelayMs,
+        RetractMm: s.RetractMm)).ToList();
+
+    bool done = false;
+    ctl.OnEvent += (_, msg) => { if (msg == "点胶作业完成") done = true; };
+    var paths = JobBuilder.BuildPaths(dtoSteps);
+    Check(paths.Count == steps.Count, "JobBuilder 段数", $"{paths.Count} 段");
+    ctl.UploadPaths(paths, PathSampler3D.Sample(paths.SelectMany(p => p.Segments)), "p2-verify");
+    ctl.RunJob();
+
+    var log = new List<(double X, double Y, double Z, bool Valve)>();
+    const double dtick = 1.0 / 120;
+    for (int i = 0; i < (int)(60 / dtick) && !done; i++)
+    {
+        ctl.Tick(dtick);
+        log.Add((card.Read(Axes.X).Pos, card.Read(Axes.Y).Pos, card.Read(Axes.Z).Pos, ctl.ValveOn));
+    }
+    Check(done, "job.completed (DXF 圆 + 两层切片)");
+
+    // 开胶采样必须落在 DXF 圆 (Z=12) 或某一层 Z 平面 (10/20/30) 上
+    var zPlanes = new[] { 12.0, 10.0, 20.0, 30.0 };
+    int bad = 0, n = 0;
+    foreach (var s in log)
+    {
+        if (!s.Valve) continue;
+        n++;
+        if (zPlanes.All(z => Math.Abs(s.Z - z) > 0.5)) bad++;
+    }
+    Check(n > 100, "valve-on samples collected", $"n={n}");
+    Check(bad == 0, "all valve-on samples on expected Z planes", $"bad={bad}");
+
+    // 提前关胶在末段生效 (末段 feed=80, a·t=120 > feed → 胶尾=制动距离 5.33mm 处关阀)
+    Check(ctl.LastValveOffRemaining > 0.5, "earlyClose active on final segment",
+        $"remaining={ctl.LastValveOffRemaining:F2}mm");
+
+    // 退枪: 最后一段 retract 3mm → 抬枪最高 Z = 30+3 = 33 (统计窗口: 开阀后)
+    int onIdx = log.FindIndex(t => t.Valve);
+    double zMax = log.Skip(onIdx).Max(t => t.Z);
+    Check(Math.Abs(zMax - 33) < 0.1, "retract → Zmax = 33", $"实际 {zMax:F2}");
+}
+
+Console.WriteLine();
+Console.WriteLine(failures == 0 ? "ALL VERIFICATION PASSED" : $"{failures} CHECK(S) FAILED");
+return failures == 0 ? 0 : 1;

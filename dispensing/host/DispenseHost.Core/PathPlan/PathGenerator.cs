@@ -91,6 +91,24 @@ public sealed class PathGenerator
     /// 用于分层点胶 (如 Z 方向多层涂胶)。
     /// </summary>
     public List<List<Point3D>> GenerateSlice(Mesh mesh, double zHeight)
+        => SliceAt(mesh, zHeight);
+
+    /// <summary>
+    /// 多 Z 分层切片: 在 [zStart, zEnd] 区间按 dz 步距逐层切网格。
+    /// 每层轮廓串成"下降→涂胶→抬升"的步骤序列即可模拟 3D 打印式涂胶/围坝填角。
+    /// 返回按层分组的轮廓链 (Z 从低到高)。
+    /// </summary>
+    public List<(double Z, List<List<Point3D>> Chains)> GenerateLayeredSlice(
+        Mesh mesh, double zStart, double zEnd, double dz)
+    {
+        if (dz <= 0) throw new ArgumentException("dz 必须大于 0", nameof(dz));
+        var layers = new List<(double Z, List<List<Point3D>> Chains)>();
+        for (double z = zStart; z <= zEnd + 1e-9; z += dz)
+            layers.Add((Math.Round(z, 6), SliceAt(mesh, z)));
+        return layers;
+    }
+
+    private List<List<Point3D>> SliceAt(Mesh mesh, double zHeight)
     {
         var intersections = new List<(Point3D A, Point3D B)>();
         foreach (var tri in mesh.Triangles)

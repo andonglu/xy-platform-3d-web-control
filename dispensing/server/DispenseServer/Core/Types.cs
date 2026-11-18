@@ -32,6 +32,14 @@ public readonly record struct Point3D(double X, double Y, double Z)
     public static Point3D operator -(Point3D a, Point3D b) => new(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
     public static Point3D operator *(Point3D a, double s) => new(a.X * s, a.Y * s, a.Z * s);
     public double Length => Math.Sqrt(X * X + Y * Y + Z * Z);
+    public static double Dot(Point3D a, Point3D b) => a.X * b.X + a.Y * b.Y + a.Z * b.Z;
+    public static Point3D Cross(Point3D a, Point3D b) =>
+        new(a.Y * b.Z - a.Z * b.Y, a.Z * b.X - a.X * b.Z, a.X * b.Y - a.Y * b.X);
+    public Point3D Normalize()
+    {
+        double l = Length;
+        return l < 1e-12 ? this : new Point3D(X / l, Y / l, Z / l);
+    }
 }
 
 public readonly record struct AxisStatus(double Pos, double Vel, AxisState State);
@@ -69,9 +77,11 @@ public sealed record AxisConfig(
 public static class Axes
 {
     public const int X = 0, Y = 1, Z = 2;
-    public static readonly string[] Names = ["x", "y", "z"];
+    public const int A = 3, C = 4;               // P4: A 摆头(绕X) / C 回转(绕Z), 单位度
+    public const int Count = 5;
+    public static readonly string[] Names = ["x", "y", "z", "a", "c"];
     public static int FromName(string name) => name.ToLowerInvariant() switch
     {
-        "x" => X, "y" => Y, "z" => Z, _ => -1,
+        "x" => X, "y" => Y, "z" => Z, "a" => A, "c" => C, _ => -1,
     };
 }
