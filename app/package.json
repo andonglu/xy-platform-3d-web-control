@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "node --watch server/index.mjs",
+    "start": "node server/index.mjs",
     "build": "vite build",
+    "test": "node --test --test-isolation=none tests/*.test.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
-    "three": "^0.180.0"
+    "three": "^0.180.0",
+    "ws": "^8.22.2"
   },
   "devDependencies": {
     "vite": "^7.2.2"

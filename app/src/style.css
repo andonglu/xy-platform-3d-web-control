@@ -91,6 +91,20 @@ input[type="text"] {
 }
 input[type="text"]:focus { outline: 1px solid var(--accent); }
 
+select {
+  flex: 1;
+  min-width: 0;
+  background: #10151e;
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+select:focus { outline: 1px solid var(--accent); }
+select:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* ---------- 按钮 ---------- */
 .btn {
   background: #232d3d;
@@ -152,6 +166,31 @@ input[type="text"]:focus { outline: 1px solid var(--accent); }
 .status-line b { color: var(--text); font-weight: 600; }
 .laser-on { color: var(--laser) !important; }
 .laser-off { color: var(--text-dim) !important; }
+
+/* ---------- 自动上下料 ---------- */
+.production-status { display: flex; align-items: center; gap: 7px; min-height: 24px; }
+.production-status > b { font-size: 13px; color: var(--accent); }
+#production-workpiece { margin-left: auto; color: var(--text-dim); font: 11px var(--mono); }
+.production-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: #596578;
+  box-shadow: 0 0 0 3px #59657818;
+}
+.production-dot.running { background: var(--accent); box-shadow: 0 0 8px #2dd4bf88; animation: production-pulse 1.4s infinite; }
+.production-dot.processing { background: #e8b64c; box-shadow: 0 0 9px #e8b64c99; }
+.production-dot.faulted { background: var(--danger); box-shadow: 0 0 9px #f0484888; animation: none; }
+.production-dot.complete { background: #51cf66; box-shadow: 0 0 7px #51cf6655; animation: none; }
+@keyframes production-pulse { 50% { opacity: 0.45; } }
+.production-meta { display: flex; justify-content: space-between; margin-top: 4px; color: var(--text-dim); font-size: 11px; }
+.production-meta b { color: var(--text); font-family: var(--mono); }
+.production-progress { height: 4px; margin: 8px 0 10px; border-radius: 4px; background: #10151e; overflow: hidden; }
+#production-progress-bar { width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.1s linear; }
+.production-recipe label { flex: none; color: var(--text-dim); font-size: 12px; }
+#btn-production-stop:not(:disabled) { border-color: #8a6a25; color: #f0c76a; }
+#btn-production-stop.fault-reset:not(:disabled) { border-color: #7a2b32; color: #ffb3b8; }
 
 /* ---------- 点动 ---------- */
 .jog-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }

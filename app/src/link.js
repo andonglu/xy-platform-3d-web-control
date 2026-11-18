@@ -1,75 +1,94 @@
-import { SimController } from './sim.js';
-
 // ---------------------------------------------------------------------------
-// 通信链路: 优先 WebSocket (C# 上位机), 未连接时回落到浏览器内置模拟控制器。
-// 对上层暴露统一接口: send(obj) / tick(dt) / onMessage 回调。
+// 浏览器远程通信链路：浏览器与上位机都是 Web 服务的 WebSocket 客户端。
+// 运动和自动生产只在服务端运行；断线时保持最后画面并自动重连，不启用本地模拟。
 // ---------------------------------------------------------------------------
 export class MotionLink {
   constructor({ onMessage, onMode }) {
     this.onMessage = onMessage;
-    this.onMode = onMode;              // 'sim' | 'ws' | 'off'
-    this.sim = new SimController(m => this._dispatch(m));
+    this.onMode = onMode;              // 'ws' | 'off'
     this.ws = null;
-    this.mode = 'sim';
+    this.mode = 'off';
+    this.url = '';
+    this.manualDisconnect = true;
+    this.reconnectTimer = null;
   }
 
   _dispatch(msg) { this.onMessage?.(msg); }
 
-  _setMode(m) {
-    this.mode = m;
-    this.onMode?.(m);
+  _setMode(mode) {
+    this.mode = mode;
+    this.onMode?.(mode);
   }
 
   connect(url) {
-    this.disconnect();
+    this.manualDisconnect = false;
+    clearTimeout(this.reconnectTimer);
+    this._closeSocket();
+    this.url = url;
     let ws;
-    try {
-      ws = new WebSocket(url);
-    } catch {
+    try { ws = new WebSocket(url); }
+    catch {
+      this._setMode('off');
       this.onMessage?.({ type: 'event', level: 'error', msg: `无效地址: ${url}` });
+      this._scheduleReconnect();
       return;
     }
     this.ws = ws;
-    this._setMode('off'); // 连接中
+    this._setMode('off');
     ws.onopen = () => {
+      if (this.ws !== ws) return;
       this._setMode('ws');
-      this.onMessage?.({ type: 'event', level: 'ok', msg: `已连接上位机 ${url}` });
+      this.send({ type: 'register', role: 'browser' });
+      this.onMessage?.({ type: 'event', level: 'ok', msg: `已连接 Web 服务 ${url}` });
     };
-    ws.onmessage = e => {
-      try { this._dispatch(JSON.parse(e.data)); }
-      catch { /* 忽略坏帧 */ }
+    ws.onmessage = event => {
+      try { this._dispatch(JSON.parse(event.data)); }
+      catch { /* 忽略无法解析的数据帧 */ }
     };
     ws.onclose = () => {
-      if (this.ws === ws) {
-        this.ws = null;
-        this._setMode('sim');
-        this.onMessage?.({ type: 'event', level: 'warn', msg: '连接断开, 回落到内置模拟' });
-      }
+      if (this.ws !== ws) return;
+      this.ws = null;
+      this._setMode('off');
+      this.onMessage?.({ type: 'event', level: 'warn', msg: 'Web 服务连接断开，2 秒后重连' });
+      this._scheduleReconnect();
     };
     ws.onerror = () => {
-      this.onMessage?.({ type: 'event', level: 'error', msg: `连接失败: ${url}` });
+      this.onMessage?.({ type: 'event', level: 'error', msg: `Web 服务连接失败: ${url}` });
     };
+  }
+
+  _scheduleReconnect() {
+    if (this.manualDisconnect || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.manualDisconnect) this.connect(this.url);
+    }, 2000);
+  }
+
+  _closeSocket() {
+    if (!this.ws) return;
+    const ws = this.ws;
+    this.ws = null;
+    ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+    ws.close();
   }
 
   disconnect() {
-    if (this.ws) {
-      const ws = this.ws;
-      this.ws = null;
-      ws.onclose = null;
-      ws.close();
-    }
-    if (this.mode !== 'sim') this._setMode('sim');
+    this.manualDisconnect = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this._closeSocket();
+    this._setMode('off');
   }
 
   send(obj) {
-    if (this.mode === 'ws' && this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(obj));
-    } else {
-      this.sim.receive(obj);
+    } else if (obj.type !== 'register') {
+      this.onMessage?.({ type: 'event', level: 'warn', msg: `Web 服务未连接，指令未发送: ${obj.type}` });
     }
   }
 
-  tick(dt) {
-    if (this.mode !== 'ws') this.sim.tick(dt);
-  }
+  // 保留原主循环接口；服务端自行推进 120Hz 控制环。
+  tick() {}
 }

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+export { LIMITS } from './machine.js';
+
 // ---------------------------------------------------------------------------
 // 机械常量
 //   机器坐标 (mm): X/Y 为水平面, Z 为升降。世界坐标: 机器 X→世界X, 机器 Y→世界Z, 机器 Z→世界Y。
@@ -8,7 +10,6 @@ import * as THREE from 'three';
 export const S = 0.05;
 export const TABLE_TOP = 1.25;            // 工作台面上表面世界高度
 export const TABLE_HALF = 104;            // 工作台面半边长 (mm)
-export const LIMITS = { x: [-100, 100], y: [-100, 100], z: [0, 60] };
 const TIP_Y0 = 1.6;                        // z=0 时激光头尖端世界高度 (离台面 0.35)
 export const TOOL_Z = 1.7;                 // 激光轴线相对 X 滑板中心的前伸量 (世界单位)
 export const TOOL_OFFSET_MM = TOOL_Z / S;  // = 34mm 刀具偏移
@@ -142,6 +143,7 @@ export function buildPlatform(scene) {
 
   // —— 状态 ——————————————————————————————————————————
   let laserOn = false;
+  let workSurface = TABLE_TOP;       // 自动上料后切换到工件上表面
   const cur = { x: 0, y: 0, z: 0 };
 
   function setAxes(x, y, z) {
@@ -149,17 +151,23 @@ export function buildPlatform(scene) {
     yCarriage.position.z = y * S;      // 机器 Y → 世界 Z
     xCarriage.position.x = x * S;
     zSlider.position.y = z * S;        // 机器 Z → 世界 Y
-    // 光束: 顶端固定于喷嘴尖端 (局部 y=TIP_Y0), 底端落在台面
+    // 光束: 顶端固定于喷嘴尖端 (局部 y=TIP_Y0), 底端落在台面或工件上表面
     const tipWorld = TIP_Y0 + z * S;
-    const len = Math.max(tipWorld - TABLE_TOP, 0.001);
-    const centerLocal = (TIP_Y0 + (TABLE_TOP - z * S)) / 2;
+    const len = Math.max(tipWorld - workSurface, 0.001);
+    const centerLocal = (TIP_Y0 + (workSurface - z * S)) / 2;
     beam.scale.y = len; beamCore.scale.y = len;
     beam.position.set(0, centerLocal, TOOL_Z);
     beamCore.position.set(0, centerLocal, TOOL_Z);
     // 光斑位置 (世界坐标)
     spot.position.x = x * S;
+    spot.position.y = workSurface + 0.012;
     spot.position.z = y * S + TOOL_Z;
-    spotLight.position.set(x * S, TABLE_TOP + 0.5, y * S + TOOL_Z);
+    spotLight.position.set(x * S, workSurface + 0.5, y * S + TOOL_Z);
+  }
+
+  function setWorkSurface(height) {
+    workSurface = height;
+    setAxes(cur.x, cur.y, cur.z);
   }
 
   function setLaser(on) {
@@ -171,7 +179,7 @@ export function buildPlatform(scene) {
   setLaser(false);
 
   return {
-    root, table, setAxes, setLaser,
+    root, table, setAxes, setLaser, setWorkSurface,
     get laserOn() { return laserOn; },
     // 当前激光落点 (机器坐标 mm, 含刀具前伸偏移 TOOL_Z/S=34mm)
     beamHit() { return { x: cur.x, y: cur.y + TOOL_Z / S }; },

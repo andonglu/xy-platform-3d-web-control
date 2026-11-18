@@ -14,17 +14,17 @@
   <aside id="panel">
     <header class="panel-head">
       <h1>三轴运动平台</h1>
-      <span id="conn-badge" class="badge badge-sim">内置模拟</span>
+      <span id="conn-badge" class="badge badge-off">服务未连接</span>
     </header>
 
     <!-- 连接 -->
     <section class="card">
       <h2>通信连接</h2>
       <div class="row">
-        <input id="ws-url" type="text" value="ws://localhost:8520/ws" spellcheck="false" aria-label="WebSocket 地址">
+        <input id="ws-url" type="text" value="" spellcheck="false" aria-label="WebSocket 地址">
         <button id="btn-connect" class="btn">连接</button>
       </div>
-      <p class="hint">连接 C# 上位机；未连接时使用浏览器内置模拟控制器</p>
+      <p class="hint">浏览器与上位机连接同一 Web 服务；页面打开后自动连接</p>
     </section>
 
     <!-- 状态 -->
@@ -54,6 +54,37 @@
         <span>激光 <b id="laser-state" class="laser-off">关闭</b></span>
         <span>模式 <b id="mode-state">Idle</b></span>
       </div>
+    </section>
+
+    <!-- 自动上下料生产单元 -->
+    <section class="card" id="production-card">
+      <h2>自动上下料</h2>
+      <div class="production-status">
+        <span id="production-dot" class="production-dot"></span>
+        <b id="production-phase">空闲</b>
+        <span id="production-workpiece">暂无工件</span>
+      </div>
+      <div class="production-meta">
+        <span>已完成 <b id="production-completed">0</b> 件</span>
+        <span id="production-mode">等待启动</span>
+      </div>
+      <div class="production-progress" aria-label="当前工序进度">
+        <div id="production-progress-bar"></div>
+      </div>
+      <div class="row production-recipe">
+        <label for="production-recipe">加工程序</label>
+        <select id="production-recipe">
+          <option value="star">五角星 · 直线</option>
+          <option value="circle">整圆 · 圆弧</option>
+          <option value="combo">综合图案</option>
+        </select>
+      </div>
+      <div class="btn-row">
+        <button id="btn-production-single" class="btn btn-primary">单件自动加工</button>
+        <button id="btn-production-continuous" class="btn">连续生产</button>
+        <button id="btn-production-stop" class="btn" disabled>完成后停止</button>
+      </div>
+      <p id="production-hint" class="hint">料仓出料 → 推料 → 夹紧 → 加工 → 下料；连续模式将在本件完成后停止</p>
     </section>
 
     <!-- 视角 -->

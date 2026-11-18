@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildPlatform, S, TABLE_TOP, TOOL_Z } from './platform.js';
+import { buildPlatform, S, TOOL_Z } from './platform.js';
 import { TableTrail } from './trail.js';
+import { ProductionCell } from './cell.js';
 import { MotionLink } from './link.js';
 import { initUI } from './ui.js';
 
@@ -59,13 +60,15 @@ scene.add(grid);
 // 平台 + 轨迹层
 const platform = buildPlatform(scene);
 const trail = new TableTrail(platform.tableMat);
+const productionCell = new ProductionCell(scene);
 
-// 规划路径预览线 (台面之上的青色细线)
+// 规划路径预览线 (台面或当前工件之上的青色细线)
 const previewMat = new THREE.LineBasicMaterial({ color: 0x2dd4bf, transparent: true, opacity: 0.55 });
 let preview = null;
 function showPreview(points) {
   if (preview) { scene.remove(preview); preview.geometry.dispose(); }
-  const pts = points.map(([x, y]) => new THREE.Vector3(x * S, TABLE_TOP + 0.02, y * S + TOOL_Z));
+  const surface = productionCell.getSurfaceHeight(latest?.production);
+  const pts = points.map(([x, y]) => new THREE.Vector3(x * S, surface + 0.02, y * S + TOOL_Z));
   preview = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), previewMat);
   scene.add(preview);
 }
@@ -105,9 +108,14 @@ function setView(name) {
 // ---------- UI ----------
 ui = initUI(link, {
   onView: setView,
-  onClearTrail: () => { trail.clear(); if (preview) { scene.remove(preview); preview = null; } },
+  onClearTrail: () => {
+    trail.clear();
+    productionCell.currentTrail?.clear();
+    if (preview) { scene.remove(preview); preview.geometry.dispose(); preview = null; }
+  },
   onLaserUI: () => {},
 });
+link.connect(document.getElementById('ws-url').value.trim());
 
 // ---------- 主循环 ----------
 const hud = document.createElement('div');
@@ -117,6 +125,7 @@ stage.appendChild(hud);
 let latest = null;                 // 最新状态包
 const shown = { x: 0, y: 0, z: 0 }; // 平滑后的显示位置
 let laserWasOn = false;
+let lastTrail = trail;
 let frames = 0, fpsT = 0, fps = 0;
 
 function resize() {
@@ -142,13 +151,23 @@ renderer.setAnimationLoop(() => {
     platform.setAxes(shown.x, shown.y, shown.z);
     platform.setLaser(!!latest.laser);
 
-    // 轨迹烧录
+    // 自动生产状态驱动工件、推杆与夹具；光束落到工件上表面。
+    const production = latest.production ?? null;
+    productionCell.update(production, dt);
+    platform.setWorkSurface(productionCell.getSurfaceHeight(production));
+    if (preview) preview.visible = production?.running ? production.phase === 'Processing' : true;
+
+    // 自动加工写入当前工件贴图；手动模式仍写入台面贴图。
+    const activeTrail = productionCell.getProcessingTrail(production) ?? trail;
     const hit = platform.beamHit();
     if (latest.laser) {
-      if (!laserWasOn) trail.moveTo(hit.x, hit.y);
-      else trail.lineTo(hit.x, hit.y);
+      if (!laserWasOn || activeTrail !== lastTrail) activeTrail.moveTo(hit.x, hit.y);
+      else activeTrail.lineTo(hit.x, hit.y);
     }
     laserWasOn = !!latest.laser;
+    lastTrail = activeTrail;
+  } else {
+    productionCell.update(null, dt);
   }
 
   // 相机补间
@@ -170,8 +189,17 @@ renderer.setAnimationLoop(() => {
 window.__SCENE_READY__ = true;
 // 验证钩子: 统计台面轨迹红色像素数
 window.__trailDebug = () => {
-  const d = trail.ctx.getImageData(0, 0, trail.canvas.width, trail.canvas.height).data;
-  let n = 0;
-  for (let i = 0; i < d.length; i += 16) if (d[i] > 150 && d[i + 1] < 90) n++;
-  return n;
+  const count = target => {
+    if (!target) return 0;
+    const d = target.ctx.getImageData(0, 0, target.canvas.width, target.canvas.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 16) if (d[i] > 150 && d[i + 1] < 90) n++;
+    return n;
+  };
+  return count(trail) + count(productionCell.currentTrail);
 };
+window.__productionDebug = () => ({
+  state: latest?.production ?? null,
+  visualWorkpieceId: productionCell.current?.id ?? null,
+  visualX: productionCell.current?.group.position.x ?? null,
+});
