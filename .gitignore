@@ -35,3 +35,7 @@ desktop.ini
 *.log
 *.tmp
 *.bak
+
+# === C# 构建产物 (所有 server/ 项目) ===
+server/**/bin/
+server/**/obj/

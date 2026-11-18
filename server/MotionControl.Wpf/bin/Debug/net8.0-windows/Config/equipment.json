@@ -1,7 +1,0 @@
-{
-  "activeChannel": "virtual",
-  "virtualMotionEndpoint": "ws://127.0.0.1:8080/ws/motion",
-  "virtualLaserEndpoint": "ws://127.0.0.1:8080/ws/laser",
-  "realMotionEndpoint": "ws://127.0.0.1:8521/ws/motion",
-  "realLaserEndpoint": "ws://127.0.0.1:8521/ws/laser"
-}
