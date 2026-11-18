@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "MotionControl.Equipment/1.0.0": {
+        "dependencies": {
+          "MotionControl.Hardware.Abstractions": "1.0.0"
+        },
+        "runtime": {
+          "MotionControl.Equipment.dll": {}
+        }
+      },
+      "MotionControl.Hardware.Abstractions/1.0.0": {
+        "runtime": {
+          "MotionControl.Hardware.Abstractions.dll": {
+            "assemblyVersion": "1.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "MotionControl.Equipment/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "MotionControl.Hardware.Abstractions/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

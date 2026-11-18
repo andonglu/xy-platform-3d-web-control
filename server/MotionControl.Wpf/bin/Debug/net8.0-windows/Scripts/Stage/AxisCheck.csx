@@ -1,0 +1,11 @@
+Log("脚本：X 轴定位自检");
+var home = await Machine.HomeAsync(CancellationToken);
+if (!home.Succeeded) throw new Exception(home.Message);
+var idle = await Machine.WaitForIdleAsync(CancellationToken);
+if (!idle.Succeeded) throw new Exception(idle.Message);
+await Machine.MoveAxisAsync("x", 20, CancellationToken);
+await DelayAsync(500);
+await Machine.MoveAxisAsync("x", 0, CancellationToken);
+var finished = await Machine.WaitForIdleAsync(CancellationToken);
+if (!finished.Succeeded) throw new Exception(finished.Message);
+Log($"自检完成：X={Machine.GetSnapshot().Axes["x"].Position:F2} mm");

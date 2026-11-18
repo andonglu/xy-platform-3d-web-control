@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>Microsoft.NET.Workloads.11.0.100.Msi.x64</id>
+    <version>11.100.1</version>
+    <authors>Microsoft</authors>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <icon>Icon.png</icon>
+    <projectUrl>https://learn.microsoft.com/dotnet/core/tools/dotnet-workload-sets</projectUrl>
+    <description>This package contains the workload set manifest for the 11.0.100 version of the .NET SDK. This package is not intended for direct reference - instead it is an internal implementation detail of the 'dotnet workload' command. See https://learn.microsoft.com/dotnet/core/tools/dotnet-workload-sets for more details.</description>
+    <copyright>© Microsoft Corporation. All rights reserved.</copyright>
+    <serviceable>true</serviceable>
+    <packageTypes>
+      <packageType name="DotnetPlatform" />
+    </packageTypes>
+    <repository type="git" url="https://github.com/dotnet/workload-versions" commit="e283f6f986422301ffea178fe9045157108211c4" />
+  </metadata>
+</package>

@@ -2,6 +2,31 @@ using MotionControl.Core;
 using MotionControl.Core.Interpolation;
 using MotionControl.Net;
 
+string Option(string name, string fallback)
+{
+    int index = Array.IndexOf(args, name);
+    return index >= 0 && index + 1 < args.Length ? args[index + 1] : fallback;
+}
+
+// 上位机客户端模式：连接 Node Web 服务并控制其模拟设备，不启动本地轴卡或 WsServer。
+if (args.Contains("--web-client"))
+{
+    string url = Option("--url", "ws://127.0.0.1:8080/ws");
+    string? command = args.Contains("--command") ? Option("--command", "home") : null;
+    int watchSeconds = int.TryParse(Option("--watch-seconds", "20"), out int seconds) ? seconds : 20;
+    try
+    {
+        using var client = new WebHostClient();
+        await client.RunAsync(url, command, watchSeconds);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Web 上位机客户端运行失败: {ex.Message}");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 // ---------------------------------------------------------------------------
 // 三轴运动平台上位机 (阶段一: 模拟轴卡 + WebSocket 广播)
 //   运行后监听 ws://localhost:8520/ws, Web 前端连接即可实时同步。

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MotionControl.Wpf</RootNamespace>
+    <AssemblyName>MotionControl.Wpf</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MotionControl.Hardware.Abstractions\MotionControl.Hardware.Abstractions.csproj" />
+    <ProjectReference Include="..\MotionControl.Hardware.Adapters\MotionControl.Hardware.Adapters.csproj" />
+    <ProjectReference Include="..\MotionControl.Equipment\MotionControl.Equipment.csproj" />
+    <ProjectReference Include="..\MotionControl.Scripting\MotionControl.Scripting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Config\**\*"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="Scripts\**\*"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+  </ItemGroup>
+</Project>

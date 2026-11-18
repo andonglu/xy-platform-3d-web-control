@@ -1,0 +1,364 @@
+{
+  "format": 1,
+  "restore": {
+    "D:\\Lry\\ThreeD\\server\\MotionControl.Verification\\MotionControl.Verification.csproj": {}
+  },
+  "projects": {
+    "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\MotionControl.Equipment.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\MotionControl.Equipment.csproj",
+        "projectName": "MotionControl.Equipment",
+        "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\MotionControl.Equipment.csproj",
+        "packagesPath": "D:\\Temp\\NuGet",
+        "outputPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\lu\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "D:\\lrysource": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {
+              "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj": {
+                "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.423/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj",
+        "projectName": "MotionControl.Hardware.Abstractions",
+        "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj",
+        "packagesPath": "D:\\Temp\\NuGet",
+        "outputPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\lu\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "D:\\lrysource": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.423/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Adapters\\MotionControl.Hardware.Adapters.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Adapters\\MotionControl.Hardware.Adapters.csproj",
+        "projectName": "MotionControl.Hardware.Adapters",
+        "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Adapters\\MotionControl.Hardware.Adapters.csproj",
+        "packagesPath": "D:\\Temp\\NuGet",
+        "outputPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Adapters\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\lu\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "D:\\lrysource": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {
+              "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj": {
+                "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.423/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Lry\\ThreeD\\server\\MotionControl.Scripting\\MotionControl.Scripting.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Lry\\ThreeD\\server\\MotionControl.Scripting\\MotionControl.Scripting.csproj",
+        "projectName": "MotionControl.Scripting",
+        "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Scripting\\MotionControl.Scripting.csproj",
+        "packagesPath": "D:\\Temp\\NuGet",
+        "outputPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Scripting\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\lu\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "D:\\lrysource": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {
+              "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\MotionControl.Equipment.csproj": {
+                "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\MotionControl.Equipment.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "dependencies": {
+            "Microsoft.CodeAnalysis.CSharp.Scripting": {
+              "target": "Package",
+              "version": "[4.8.0, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.423/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "D:\\Lry\\ThreeD\\server\\MotionControl.Verification\\MotionControl.Verification.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "D:\\Lry\\ThreeD\\server\\MotionControl.Verification\\MotionControl.Verification.csproj",
+        "projectName": "MotionControl.Verification",
+        "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Verification\\MotionControl.Verification.csproj",
+        "packagesPath": "D:\\Temp\\NuGet",
+        "outputPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Verification\\obj\\",
+        "projectStyle": "PackageReference",
+        "fallbackFolders": [
+          "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
+        ],
+        "configFilePaths": [
+          "C:\\Users\\lu\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "D:\\lrysource": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {
+              "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\MotionControl.Equipment.csproj": {
+                "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Equipment\\MotionControl.Equipment.csproj"
+              },
+              "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj": {
+                "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Abstractions\\MotionControl.Hardware.Abstractions.csproj"
+              },
+              "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Adapters\\MotionControl.Hardware.Adapters.csproj": {
+                "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Hardware.Adapters\\MotionControl.Hardware.Adapters.csproj"
+              },
+              "D:\\Lry\\ThreeD\\server\\MotionControl.Scripting\\MotionControl.Scripting.csproj": {
+                "projectPath": "D:\\Lry\\ThreeD\\server\\MotionControl.Scripting\\MotionControl.Scripting.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\8.0.423/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}
