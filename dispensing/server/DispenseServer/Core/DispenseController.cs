@@ -88,8 +88,8 @@ public sealed class DispenseController
     }
 
     /// <summary>
-    /// RTCP 标定: 真实机床 (RealGeometry) 作为测量源, 双高度差分探测 + 高斯-牛顿
-    /// 拟合 A/C 轴线误差与枢轴误差, 写回名义模型 Kinematics。
+    /// RTCP 标定: 真实机床 (RealGeometry) 作为测量源, 单高度多姿态探测 + 7 参数
+    /// 联合高斯-牛顿拟合 A/C 轴线误差与枢轴误差, 写回名义模型 Kinematics。
     /// 标定后编程 TCP 轨迹与实际 TCP 的系统性偏离消除。
     /// </summary>
     public void CalibrateRtcp()
@@ -411,16 +411,24 @@ public sealed class DispenseController
             case RunState.Phase.PtpStart:
                 // 等待 PTP 到位 (XY 到起点, Z 在安全高度)
                 if (Enumerable.Range(0, Axes.Count).Any(i => _card.Read(i).State == AxisState.Moving)) return;
-                // 下降到该段起点的工作高度 (分层 3D 路径时各层 Z 不同, 不再固定 PenDownZ)
-                double workZ = r.Paths[r.SegIdx].Segments[0].PointAt(0).Z;
-                _card.SetTarget(Axes.Z, workZ, 40);
-                // P4 五轴: 带法向的段在下降同时预摆 A/C 到起点姿态 (RTCP 开时)
+                // P4 五轴: RTCP 开且带法向时, 下降目标必须是逆解枢轴位置 (含 L·t 补偿),
+                // 否则枢轴被降到 TCP 高度, 针尖穿出工作面, 开阀瞬间 TCP 偏离达一个工具长
                 var segNormals0 = r.Paths[r.SegIdx].SegmentNormals;
                 if (segNormals0 is not null && RtcpEnabled)
                 {
                     var sol = Kinematics.SolveTcp(r.Paths[r.SegIdx].Segments[0].PointAt(0), segNormals0[0][0]);
+                    _card.SetTarget(Axes.X, sol.pivot.X, 40);
+                    _card.SetTarget(Axes.Y, sol.pivot.Y, 40);
+                    _card.SetTarget(Axes.Z, sol.pivot.Z, 40);
+                    // 下降同时预摆 A/C 到起点姿态
                     _card.SetTarget(Axes.A, sol.aDeg, 90);
                     _card.SetTarget(Axes.C, sol.cDeg, 120);
+                }
+                else
+                {
+                    // 下降到该段起点的工作高度 (分层 3D 路径时各层 Z 不同, 不再固定 PenDownZ)
+                    double workZ = r.Paths[r.SegIdx].Segments[0].PointAt(0).Z;
+                    _card.SetTarget(Axes.Z, workZ, 40);
                 }
                 r.CurrentPhase = RunState.Phase.Descend;
                 break;

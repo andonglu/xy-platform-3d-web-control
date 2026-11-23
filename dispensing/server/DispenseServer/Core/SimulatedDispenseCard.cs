@@ -35,7 +35,7 @@ public sealed class SimulatedDispenseCard : IDispenseAxisCard
         new AxisSim(new AxisConfig(-150, 150, 0, -148, 148, 0, 20)),   // X: 零点在 0, 负极限 -148, 正极限 +148
         new AxisSim(new AxisConfig(-150, 150, 0, -148, 148, 0, 20)),   // Y
         new AxisSim(new AxisConfig(0, 80, 40, 2, 78, 40, 15)),         // Z: 行程 0~80, 零点 40, 负极限 2, 正极限 78
-        new AxisSim(new AxisConfig(-110, 110, 0, -108, 108, 0, 30)),   // A: 摆头 -110°~+110°, 零点 0
+        new AxisSim(new AxisConfig(-105, 105, 0, -108, 108, 0, 30)),   // A: 摆头软限位 ±105° (硬限位 ±108° 外侧, 超限先告警不撞机)
         new AxisSim(new AxisConfig(-180, 180, 0, -178, 178, 0, 45)),   // C: 回转 ±180°, 零点 0
     ];
 

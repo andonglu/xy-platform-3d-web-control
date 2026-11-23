@@ -59,61 +59,51 @@ public sealed class FiveAxisKinematics
     // ---------------- 标定 ----------------
 
     /// <summary>
-    /// RTCP 标定: 两个枢轴高度 × 八个姿态的探针测量, 差分消除枢轴误差后
-    /// 高斯-牛顿最小二乘拟合 A/C 轴线误差 (4 参数), 再求枢轴误差均值。
-    /// 拟合结果写回本模型 (AxisA/AxisC/PivotError), Calibrated=true。
+    /// RTCP 标定: 单枢轴高度 × 十六个姿态的探针测量, 7 参数联合高斯-牛顿
+    /// 最小二乘拟合 A/C 轴线误差 (4 参数) 与枢轴误差 (3 参数)。
+    /// 多姿态下 L·t 随姿态变化而枢轴误差恒定, 两类参数可联合观测, 无需差分。
+    /// 每次从理想模型出发拟合绝对值 (重复标定幂等), 结果写回 AxisA/AxisC/PivotError。
     /// 返回标定残差 (mm, 拟合后预测误差 RMS)。
     /// </summary>
     public double Calibrate(Func<Point3D, double, double, Point3D> measureTrueTcp)
     {
         double L = ToolLength;
-        // 探针姿态: A ∈ {-40,-15,15,40}, C ∈ {0, 90, 180, 270} 组合取 8 个
+        // 探针姿态: A ∈ {-40,-15,15,40}, C ∈ {0, 90, 180, 270} 组合 16 个
         var poses = new List<(double a, double c)>();
         foreach (double a in new[] { -40.0, -15.0, 15.0, 40.0 })
             foreach (double c in new[] { 0.0, 90.0, 180.0, 270.0 })
                 poses.Add((a, c));
-        double[] heights = [20.0, 60.0];   // 两个枢轴 Z 高度, 差分消除 PivotError
+        var probePivot = new Point3D(0, 0, 20);   // 固定枢轴高度
 
-        // 基准模型 (理想轴线) 用于计算预测值
-        var ideal = new FiveAxisKinematics { ToolLength = L };
-
-        // 参数 p = [εay, εaz, εcx, εcy]: uA = normalize(ex + εa), uC = normalize(ez + εc)
-        var p = new double[4];
+        // 参数 p = [εay, εaz, εcx, εcy, px, py, pz]:
+        //   uA = normalize(1, εay, εaz), uC = normalize(εcx, εcy, 1), PivotError = (px, py, pz)
+        var p = new double[7];
         const double eps = 1e-7;
 
-        // 残差函数: 每探针 = 实测TCP - 预测TCP(参数化模型) —— 用双高度差分
+        // 残差函数: 每探针 = 实测TCP - (枢轴 + 枢轴误差 + L·t_pred), 非差分直接测量
         void Residuals(double[] prm, List<Point3D> outR, List<double[]>? outJ)
         {
             outR.Clear();
             if (outJ is not null) outJ.Clear();
             foreach (var (a, c) in poses)
             {
-                Point3D m0 = measureTrueTcp(new Point3D(0, 0, heights[0]), a, c);
-                Point3D m1 = measureTrueTcp(new Point3D(0, 0, heights[1]), a, c);
-                Point3D diff = m1 - m0;                       // 真实方向矢量 (含枢轴无关)
-                // 参数化预测差分 (基向量与 ToolDir 一致: (0,0,-1))
-                var uA = new Point3D(1, prm[0], prm[1]).Normalize();
-                var uC = new Point3D(prm[2], prm[3], 1).Normalize();
-                double ar = a * Math.PI / 180, cr = c * Math.PI / 180;
-                var pred = Rotate(Rotate(new Point3D(0, 0, -1), uA, ar), uC, cr) * L;
-                outR.Add(diff - pred);
+                Point3D m = measureTrueTcp(probePivot, a, c);
+                Point3D pred = PredictTcp(prm, a, c, probePivot, L);
+                outR.Add(m - pred);
                 if (outJ is not null)
                 {
-                    for (int k = 0; k < 4; k++)
+                    for (int k = 0; k < 7; k++)
                     {
                         var pp = (double[])prm.Clone();
                         pp[k] += eps;
-                        var uA2 = new Point3D(1, pp[0], pp[1]).Normalize();
-                        var uC2 = new Point3D(pp[2], pp[3], 1).Normalize();
-                        var pred2 = Rotate(Rotate(new Point3D(0, 0, -1), uA2, ar), uC2, cr) * L;
-                        var d = pred2 - pred;
+                        var d = PredictTcp(pp, a, c, probePivot, L) - pred;
                         outJ.Add([d.X / eps, d.Y / eps, d.Z / eps]);   // 3 行/参数
                     }
                 }
             }
         }
 
-        // 高斯-牛顿迭代 (4 参数, 24 残差方程)
+        // 高斯-牛顿迭代 (7 参数, 48 残差方程)
         var r = new List<Point3D>();
         var jCols = new List<double[]>();
         for (int iter = 0; iter < 8; iter++)
@@ -122,48 +112,55 @@ public sealed class FiveAxisKinematics
             int m = r.Count;
             // 调试: 打印每轮残差范数 (诊断标定收敛)
             double dbg = 0; foreach (var v in r) dbg += v.X * v.X + v.Y * v.Y + v.Z * v.Z;
-            Console.WriteLine($"    [calib iter {iter}] p=({p[0]:F5},{p[1]:F5},{p[2]:F5},{p[3]:F5}) |r|={Math.Sqrt(dbg / (m * 3)):F4}");
-            // 正规方程 (JᵀJ)₄ₓ₄ Δ = -Jᵀr (jCols 按 i-major 存储: [i*4+k])
-            var jtj = new double[4, 4];
-            var jtr = new double[4];
+            Console.WriteLine($"    [calib iter {iter}] |r|={Math.Sqrt(dbg / (m * 3)):E3} mm");
+            // 正规方程 (JᵀJ)₇ₓ₇ Δ = -Jᵀr (jCols 按 i-major 存储: [i*7+k])
+            var jtj = new double[7, 7];
+            var jtr = new double[7];
             for (int i = 0; i < m; i++)
             {
                 var ri = new[] { r[i].X, r[i].Y, r[i].Z };
-                for (int k = 0; k < 4; k++)
+                for (int k = 0; k < 7; k++)
                 {
-                    var jk = jCols[i * 4 + k];   // 参数 k 对测量 i 的雅可比 (3)
-                    for (int l = 0; l < 4; l++)
+                    var jk = jCols[i * 7 + k];   // 参数 k 对测量 i 的雅可比 (3)
+                    for (int l = 0; l < 7; l++)
                     {
-                        var jl = jCols[i * 4 + l];
+                        var jl = jCols[i * 7 + l];
                         jtj[k, l] += jk[0] * jl[0] + jk[1] * jl[1] + jk[2] * jl[2];
                     }
                     jtr[k] += jk[0] * ri[0] + jk[1] * ri[1] + jk[2] * ri[2];
                 }
             }
-            // 4×4 高斯消元
-            var delta = Solve4(jtj, jtr);
-            for (int k = 0; k < 4; k++) p[k] -= delta[k];
+            // r = m − pred, J = ∂pred/∂p ⟹ Δ = (JᵀJ)⁻¹Jᵀr 沿残差下降方向, p += Δ
+            var delta = SolveN(jtj, jtr);
+            for (int k = 0; k < 7; k++) p[k] += delta[k];
         }
 
-        // 写回修正后的轴线
+        // 写回拟合后的轴线与枢轴误差 (绝对值)
         AxisA = new Point3D(1, p[0], p[1]).Normalize();
         AxisC = new Point3D(p[2], p[3], 1).Normalize();
+        PivotError = new Point3D(p[4], p[5], p[6]);
 
-        // 枢轴误差: 标定后预测残差均值 (此时仅差常值枢轴项)
+        // 最终残差 RMS
         Residuals(p, r, null);
-        var mean = new Point3D(r.Average(v => v.X), r.Average(v => v.Y), r.Average(v => v.Z));
-        PivotError = PivotError + mean;
-
-        // 最终残差 RMS (差分域)
         double sum = 0;
-        foreach (var v in r) { var q = v - mean; sum += q.X * q.X + q.Y * q.Y + q.Z * q.Z; }
+        foreach (var v in r) sum += v.X * v.X + v.Y * v.Y + v.Z * v.Z;
         Calibrated = true;
         return Math.Sqrt(sum / (r.Count * 3));
     }
 
-    private static double[] Solve4(double[,] a, double[] b)
+    /// <summary>参数化模型的 TCP 预测: 枢轴 + 枢轴误差 + L·t(A,C)</summary>
+    private static Point3D PredictTcp(double[] prm, double aDeg, double cDeg, Point3D pivot, double L)
     {
-        int n = 4;
+        var uA = new Point3D(1, prm[0], prm[1]).Normalize();
+        var uC = new Point3D(prm[2], prm[3], 1).Normalize();
+        double ar = aDeg * Math.PI / 180, cr = cDeg * Math.PI / 180;
+        var t = Rotate(Rotate(new Point3D(0, 0, -1), uA, ar), uC, cr);
+        return pivot + new Point3D(prm[4], prm[5], prm[6]) + t * L;
+    }
+
+    private static double[] SolveN(double[,] a, double[] b)
+    {
+        int n = b.Length;
         var m = new double[n, n + 1];
         for (int i = 0; i < n; i++) { for (int j = 0; j < n; j++) m[i, j] = a[i, j]; m[i, n] = b[i]; }
         for (int col = 0; col < n; col++)

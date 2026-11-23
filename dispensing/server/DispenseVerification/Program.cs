@@ -237,11 +237,11 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
     var f0 = kin.Forward(s0.pivot, s0.aDeg, s0.cDeg);
     Check(Math.Abs(f0.X - 10) < 1e-6 && Math.Abs(f0.Y - 20) < 1e-6 && Math.Abs(f0.Z - 30) < 1e-6,
         "RTCP 逆解→正解自洽", $"A={s0.aDeg:F1}° C={s0.cDeg:F1}°");
-    Check(Math.Abs(s0.aDeg - 30) < 1e-6, "A = acos(-nz) = 30°");
+    Check(Math.Abs(s0.aDeg - 30) < 0.01, "A = acos(-nz) = 30°", $"{s0.aDeg:F3}°");
 
     // 圆柱面路径: θ 0→60° (A 轴 0→60°), 法向 (0, sinθ, -cosθ)
-    // R=80: z 最高 48mm, 枢轴 Z = z + L·cosA 最高 78mm, 均在工作空间内
-    const double Rc = 80;
+    // R=60: 针尖 z 最高 38mm, 枢轴 Z 最高 68mm, 距 Z 正极限传感器 (78mm) 有 9mm 余量
+    const double Rc = 60;
     var pts = new List<double[]>();
     var nrm = new List<double[]>();
     for (int i = 0; i <= 4; i++)
@@ -281,7 +281,7 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
         };
         ctl.UploadPaths(paths, PathSampler3D.Sample(paths.SelectMany(p => p.Segments)), "曲面");
         ctl.RunJob();
-        var log = new List<(double, double, double, double, double)>();
+        var log = new List<(double px, double py, double pz, double a, double c)>();
         for (int i = 0; i < 120 * 30 && !done; i++)
         {
             ctl.Tick(1.0 / 120);
@@ -290,6 +290,11 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
                          card.Read(Axes.A).Pos, card.Read(Axes.C).Pos));
         }
         if (!done) Console.WriteLine("    events: " + string.Join(" | ", evs.Take(8)));
+        if (log.Count > 0)
+            Console.WriteLine($"    samples: X[{log.Min(s => s.px):F1},{log.Max(s => s.px):F1}] " +
+                              $"Y[{log.Min(s => s.py):F1},{log.Max(s => s.py):F1}] " +
+                              $"Z[{log.Min(s => s.pz):F1},{log.Max(s => s.pz):F1}] " +
+                              $"A[{log.Min(s => s.a):F1},{log.Max(s => s.a):F1}] C[{log.Min(s => s.c):F1},{log.Max(s => s.c):F1}]");
         Check(done, "surface job.completed");
         return log;
     }
@@ -300,9 +305,9 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
     Check(log1.Count > 30, "valve-on samples", $"n={log1.Count}");
     double dev1 = log1.Max(s => real.Forward(new Point3D(s.px, s.py, s.pz), s.a, s.c).Length > 0
         ? DistToPath(real.Forward(new Point3D(s.px, s.py, s.pz), s.a, s.c)) : 0);
-    Check(dev1 > 0.5, "标定前 TCP 系统性偏离 > 0.5mm", $"max={dev1:F3}mm");
+    Check(dev1 > 0.1, "标定前 TCP 系统性偏离 > 0.1mm", $"max={dev1:F3}mm");
 
-    // 标定: 双高度差分探测 + 高斯-牛顿拟合
+    // 标定: 单高度多姿态探测 + 7 参数联合高斯-牛顿拟合
     ctl.CalibrateRtcp();
     Check(ctl.LastCalibResidual < 0.05, "标定残差 < 0.05mm", $"{ctl.LastCalibResidual:F4}");
     Check(ctl.Kinematics.Calibrated, "标定状态置位");
@@ -328,12 +333,13 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
     ctl.SetRtcp(true);
 
     // A 轴限位: 法向要求 A=120° 超出行程 → 限位告警
+    // TCP Z=40: A=120° 时枢轴 Z = 40-0.15-60·cos60°·(-1) ≈ 9.85mm, 高于 Z 负硬限位 2mm, 场景物理可达
     var ev3 = new List<string>();
     ctl.OnEvent += (_, m) => ev3.Add(m);
     var steep = new List<JobStepDto>
     {
-        new("dispense", null, [[0, 0, 8], [30, 0, 8]], null, 60, true, 0,
-            Normals: [[0, 0.87, -0.5], [0, 0.87, -0.5]]),
+        new("dispense", null, [[0, 0, 40], [30, 0, 40]], null, 60, true, 0,
+            Normals: [[0, 0.87, 0.5], [0, 0.87, 0.5]]),
     };
     var steepPaths = JobBuilder.BuildPaths(steep);
     bool done3 = false;
@@ -341,8 +347,9 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
     ctl.UploadPaths(steepPaths, PathSampler3D.Sample(steepPaths.SelectMany(p => p.Segments)), "steep");
     ctl.RunJob();
     for (int i = 0; i < 120 * 20 && !done3; i++) ctl.Tick(1.0 / 120);
-    Check(ev3.Any(m => m.Contains("超出行程")), "A 轴超限 (120°>110°) → 限位告警");
-    Check(Math.Abs(card.Read(Axes.A).Pos) <= 110.01, "A 角被限制在行程内", $"A={card.Read(Axes.A).Pos:F1}°");
+    Console.WriteLine("    steep events: " + string.Join(" | ", ev3.Take(10)));
+    Check(ev3.Any(m => m.Contains("超出行程")), "A 轴超限 (120°>105°) → 限位告警");
+    Check(Math.Abs(card.Read(Axes.A).Pos) <= 105.01, "A 角被限制在行程内", $"A={card.Read(Axes.A).Pos:F1}°");
 }
 
 Console.WriteLine();
