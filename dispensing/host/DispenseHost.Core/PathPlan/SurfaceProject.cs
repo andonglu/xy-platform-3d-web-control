@@ -6,7 +6,9 @@ namespace DispenseHost.PathPlan;
 /// <summary>P7: 曲面工程参数, 保存后可用相同模型与工艺重新生成作业</summary>
 public sealed record SurfaceProjectSettings(
     double ZStart, double ZEnd, double LayerHeight, double NormalOffset,
-    double Feed, DispenseTiming Timing, ModelTransform Transform);
+    double Feed, DispenseTiming Timing, ModelTransform Transform,
+    double PointSpacing = 0, int NormalSmoothPasses = 0,
+    double NormalSmoothStrength = 0.5, double MaxPoseStepDeg = 30);
 
 /// <summary>P7: 已加入作业的一条曲面路径</summary>
 public sealed record SurfaceJobItem(string Name, double Feed, DispenseTiming Timing, SurfacePath Path);

@@ -296,7 +296,7 @@ public sealed class DispenseWsServer : IDisposable
         if (program is null) { Broadcast(new { type = "event", level = "error", msg = $"程序 {id} 不存在" }); return; }
         var paths = JobBuilder.BuildPaths(program.Steps);
         if (paths.Count == 0) { Broadcast(new { type = "event", level = "error", msg = $"程序 {id} 无有效路径" }); return; }
-        _controller.UploadPaths(paths, PathSampler3D.Sample(paths.SelectMany(p => p.Segments)), program.Name);
+        if (!_controller.UploadPaths(paths, PathSampler3D.Sample(paths.SelectMany(p => p.Segments)), program.Name)) return;
         Broadcast(new { type = "event", level = "ok", msg = $"程序 {id}《{program.Name}》已装载" });
         if (run)
         {

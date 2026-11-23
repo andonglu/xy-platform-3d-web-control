@@ -78,6 +78,8 @@ public sealed class DispenseController
     };
     public bool RtcpEnabled { get; private set; }
     public double LastCalibResidual { get; private set; } = -1;
+    /// <summary>P8: 相邻编程点允许的最大 A/C 姿态变化, 超限拒绝执行</summary>
+    public double MaxPoseStepDeg { get; set; } = 30;
 
     /// <summary>RTCP 开关: 开=带法向路径按五轴联动 (TCP 轨迹编程); 关=按三轴直线执行</summary>
     public void SetRtcp(bool on)
@@ -189,13 +191,31 @@ public sealed class DispenseController
 
     public void SetValve(bool on) => ValveOn = on;
 
-    /// <summary>上传点胶路径 (从上位机 DTO 构建)</summary>
-    public void UploadPaths(List<DispensePath3D> paths, List<double[]> preview, string name)
+    /// <summary>上传点胶路径; P8 五轴预检查失败时清空作业并返回 false</summary>
+    public bool UploadPaths(List<DispensePath3D> paths, List<double[]> preview, string name)
     {
+        if (!ValidateFiveAxisPaths(paths))
+        {
+            _run = null;
+            ValveOn = false;
+            return false;
+        }
         _run = new RunState { Paths = paths, StartPoint = GetFirstPoint(paths) };
         CurrentJobName = name;
         OnPath?.Invoke(new { type = "path", name, points3d = preview });
         OnEvent?.Invoke("ok", $"路径已上传: {paths.Count} 段, 总长 {paths.Sum(p => p.Segments.Sum(s => s.Length)):F1}mm");
+        return true;
+    }
+
+    private bool ValidateFiveAxisPaths(List<DispensePath3D> paths)
+    {
+        if (!RtcpEnabled || paths.All(p => p.SegmentNormals is null)) return true;
+        var report = FiveAxisPathGuard.Validate(paths, Kinematics, GetConfigs(), MaxPoseStepDeg);
+        if (report.IsSafe) return true;
+        string details = string.Join("；", report.Errors.Take(3));
+        if (report.Errors.Count > 3) details += $"；另 {report.Errors.Count - 3} 项";
+        OnEvent?.Invoke("error", $"五轴预检查失败 ({report.Errors.Count} 项): {details}");
+        return false;
     }
 
     /// <summary>当前装载的作业名 (脱机程序运行/上传时更新)</summary>
@@ -231,6 +251,13 @@ public sealed class DispenseController
         if (_homing)
         {
             OnEvent?.Invoke("error", "正在回零，无法运行");
+            return;
+        }
+        // 上传后轴配置/标定可能改变, 每次运行前必须重新做最终安全检查
+        if (!ValidateFiveAxisPaths(r.Paths))
+        {
+            _run = null;
+            ValveOn = false;
             return;
         }
         r.CurrentPhase = RunState.Phase.PtpStart;
@@ -420,9 +447,11 @@ public sealed class DispenseController
                     _card.SetTarget(Axes.X, sol.pivot.X, 40);
                     _card.SetTarget(Axes.Y, sol.pivot.Y, 40);
                     _card.SetTarget(Axes.Z, sol.pivot.Z, 40);
-                    // 下降同时预摆 A/C 到起点姿态
+                    // P8: 段间 PTP 选靠近 C 行程中心的等价角, 给段内连续展开预留空间
+                    var (cMin, cMax) = _card.GetLimit(Axes.C);
+                    double startC = FiveAxisPathGuard.CenterInitialAngle(sol.cDeg, cMin, cMax);
                     _card.SetTarget(Axes.A, sol.aDeg, 90);
-                    _card.SetTarget(Axes.C, sol.cDeg, 120);
+                    _card.SetTarget(Axes.C, startC, 120);
                 }
                 else
                 {
@@ -565,22 +594,25 @@ public sealed class DispenseController
             double frac = r.SubTotal <= 0 ? 0 : Math.Min(r.SubS / r.SubTotal, 1);
             var n = (nn[0] + (nn[1] - nn[0]) * frac).Normalize();
             var sol = Kinematics.SolveTcp(pt, n);
+            // P8: C 轴只在出胶段内展开到上一周期 ±180° 邻域; 跨 ±180° 不再反转 358°
+            bool singular = Math.Sin(sol.aDeg * Math.PI / 180) < 1e-8;
+            double cDeg = singular ? r.LastC : FiveAxisPathGuard.UnwrapAngleDeg(sol.cDeg, r.LastC);
             double safeDt = Math.Max(dt, 1e-6);
             double angVelA = Math.Abs(sol.aDeg - r.LastA) / safeDt;
-            double angVelC = Math.Abs(sol.cDeg - r.LastC) / safeDt;
-            r.LastA = sol.aDeg; r.LastC = sol.cDeg;
+            double angVelC = Math.Abs(cDeg - r.LastC) / safeDt;
+            r.LastA = sol.aDeg; r.LastC = cDeg;
             var (aMin, aMax) = _card.GetLimit(Axes.A);
             var (cMin, cMax) = _card.GetLimit(Axes.C);
-            if (!r.AxisLimitWarned && (sol.aDeg < aMin || sol.aDeg > aMax || sol.cDeg < cMin || sol.cDeg > cMax))
+            if (!r.AxisLimitWarned && (sol.aDeg < aMin || sol.aDeg > aMax || cDeg < cMin || cDeg > cMax))
             {
                 r.AxisLimitWarned = true;
-                OnEvent?.Invoke("warn", $"A/C 角 ({sol.aDeg:F1}°, {sol.cDeg:F1}°) 超出行程 [{aMin}~{aMax}]/[{cMin}~{cMax}], 已限位, TCP 将偏离轨迹");
+                OnEvent?.Invoke("warn", $"A/C 角 ({sol.aDeg:F1}°, {cDeg:F1}°) 超出行程 [{aMin}~{aMax}]/[{cMin}~{cMax}], 已限位, TCP 将偏离轨迹");
             }
             _card.SetPosition(Axes.X, sol.pivot.X, r.V);
             _card.SetPosition(Axes.Y, sol.pivot.Y, r.V);
             _card.SetPosition(Axes.Z, sol.pivot.Z, r.V);
             _card.SetPosition(Axes.A, sol.aDeg, angVelA);
-            _card.SetPosition(Axes.C, sol.cDeg, angVelC);
+            _card.SetPosition(Axes.C, cDeg, angVelC);
         }
         else
         {

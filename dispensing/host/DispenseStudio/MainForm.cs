@@ -59,6 +59,8 @@ public sealed class MainForm : Form
     private readonly NumericUpDown _numTx = new(), _numTy = new(), _numTz = new();
     private readonly NumericUpDown _numRx = new(), _numRy = new(), _numRz = new(), _numScale = new();
     private readonly NumericUpDown _numZStart = new(), _numZEnd = new(), _numLayer = new(), _numOffset = new();
+    private readonly NumericUpDown _numPointSpacing = new(), _numSmoothPasses = new(), _numSmoothStrength = new();
+    private readonly NumericUpDown _numMaxPoseStep = new();
     private readonly NumericUpDown _numSurfaceFeed = new();
     private readonly NumericUpDown _numOpenDelay = new(), _numEarlyClose = new();
     private readonly NumericUpDown _numCloseDelay = new(), _numRetract = new();
@@ -273,6 +275,10 @@ public sealed class MainForm : Form
         b.Num("切片 Z 终点", _numZEnd, 20, -500, 500);
         b.Num("层间距 (mm)", _numLayer, 5, 0.1m, 100);
         b.Num("法向偏置 (mm)", _numOffset, 0, -100, 100);
+        b.Num("等弧长间距 (mm)", _numPointSpacing, 2, 0, 50);
+        b.Num("法向平滑次数", _numSmoothPasses, 2, 0, 20, 0);
+        b.Num("法向平滑强度", _numSmoothStrength, 0.5m, 0, 1, 2);
+        b.Num("最大姿态步长 (°)", _numMaxPoseStep, 30, 1, 30);
         b.Num("曲面进给 (mm/s)", _numSurfaceFeed, 60, 1, 300);
         b.Num("开阀延时 (ms)", _numOpenDelay, 0, 0, 10000, 0);
         b.Num("提前关胶 (ms)", _numEarlyClose, 0, 0, 10000, 0);
@@ -686,7 +692,9 @@ public sealed class MainForm : Form
     private SurfaceProjectSettings ReadSurfaceSettings() => new(
         (double)_numZStart.Value, (double)_numZEnd.Value, (double)_numLayer.Value,
         (double)_numOffset.Value, (double)_numSurfaceFeed.Value,
-        ReadSurfaceTiming(), ReadTransform());
+        ReadSurfaceTiming(), ReadTransform(),
+        (double)_numPointSpacing.Value, (int)_numSmoothPasses.Value,
+        (double)_numSmoothStrength.Value, (double)_numMaxPoseStep.Value);
 
     private static void SetNum(NumericUpDown control, double value)
         => control.Value = Math.Clamp((decimal)value, control.Minimum, control.Maximum);
@@ -695,6 +703,8 @@ public sealed class MainForm : Form
     {
         SetNum(_numZStart, s.ZStart); SetNum(_numZEnd, s.ZEnd);
         SetNum(_numLayer, s.LayerHeight); SetNum(_numOffset, s.NormalOffset);
+        SetNum(_numPointSpacing, s.PointSpacing); SetNum(_numSmoothPasses, s.NormalSmoothPasses);
+        SetNum(_numSmoothStrength, s.NormalSmoothStrength); SetNum(_numMaxPoseStep, s.MaxPoseStepDeg);
         SetNum(_numSurfaceFeed, s.Feed);
         SetNum(_numOpenDelay, s.Timing.OpenDelayMs); SetNum(_numEarlyClose, s.Timing.EarlyCloseMs);
         SetNum(_numCloseDelay, s.Timing.CloseDelayMs); SetNum(_numRetract, s.Timing.RetractMm);
@@ -748,7 +758,8 @@ public sealed class MainForm : Form
             _surfacePreview = [];
             _transformedMesh = s.Transform.ApplyTo(_sourceMesh);
             _surfacePreview = new PathGenerator().GenerateSurfacePaths(
-                _transformedMesh, s.ZStart, s.ZEnd, s.LayerHeight, s.NormalOffset);
+                _transformedMesh, s.ZStart, s.ZEnd, s.LayerHeight, s.NormalOffset,
+                s.PointSpacing, s.NormalSmoothPasses, s.NormalSmoothStrength);
             if (_surfacePreview.Count == 0) throw new InvalidOperationException("指定 Z 范围没有生成有效路径");
             int points = _surfacePreview.Sum(p => p.Points.Count);
             double length = _surfacePreview.Sum(SurfaceLength);
@@ -831,6 +842,23 @@ public sealed class MainForm : Form
         catch (Exception ex) { AppendLog("曲面工程加载失败: " + ex.Message); }
     }
 
+    private bool ValidateSurfaceSafety()
+    {
+        if (_surfaceItems.Count == 0) return true;
+        var report = SurfacePathSafety.Analyze(_surfaceItems.Select(i => i.Path), _configs,
+            _state.Rtcp?.ToolLength ?? 0, (double)_numMaxPoseStep.Value);
+        foreach (var warning in report.Warnings) AppendLog("⚠ " + warning);
+        if (!report.IsSafe)
+        {
+            foreach (var error in report.Errors) AppendLog("⚠ " + error);
+            AppendLog($"五轴预检查未通过: {report.Errors.Count} 项错误，已阻止上传/执行");
+            return false;
+        }
+        AppendLog($"五轴预检查通过: {report.CheckedPoints} 点, " +
+                  $"最大姿态步长 A={report.MaxAStepDeg:F2}° / C={report.MaxCStepDeg:F2}°");
+        return true;
+    }
+
     private async Task UploadJobAsync()
     {
         if (_job.Patterns.Count == 0 && _surfaceItems.Count == 0)
@@ -847,6 +875,7 @@ public sealed class MainForm : Form
         }
         if (_surfaceItems.Count > 0 && _state.Rtcp?.Calibrated != true)
             AppendLog("⚠ RTCP 尚未标定，建议先标定再执行");
+        if (!ValidateSurfaceSafety()) return;
 
         var warns = _job.ValidateAgainst(_configs);
         foreach (var w in warns) AppendLog("⚠ " + w);
@@ -865,6 +894,7 @@ public sealed class MainForm : Form
             AppendLog("⚠ 曲面作业需要开启 RTCP，已阻止执行");
             return;
         }
+        if (!ValidateSurfaceSafety()) return;
         await client.RunJobAsync();
     }
 

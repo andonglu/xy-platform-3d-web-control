@@ -450,6 +450,8 @@ Console.WriteLine("[5] P6 STL 曲面: 等高层路径 + 法向偏置 + RTCP 真�
 
     var card6 = new SimulatedDispenseCard();
     var ctl6 = new DispenseController(card6, new CollisionChecker(card6), new DefaultInterpolationEngine());
+    // P6 是整圆几何验证; P8 起默认 C±180° 不允许连续整圆, 扩程后单独验证 TCP 精度
+    card6.ConfigureAxis(Axes.C, new AxisConfig(-540, 540, 0, -538, 538, 0, 45));
     ctl6.SetRtcp(true);
     ctl6.CalibrateRtcp();
     Check(ctl6.Kinematics.Calibrated && ctl6.LastCalibResidual < 0.001,
@@ -523,7 +525,8 @@ endsolid patch
 
         var settings7 = new SurfaceProjectSettings(10, 10, 1, 2, 80,
             new DispenseTiming(20, 30, 40, 3),
-            new ModelTransform { Position = new HostPoint(1, 2, 3), Scale = 1.5 });
+            new ModelTransform { Position = new HostPoint(1, 2, 3), Scale = 1.5 },
+            2, 3, 0.6, 25);
         var project7 = new SurfaceProject(1, stlPath, settings7,
             [new SurfaceJobItem("测试曲面", 80, settings7.Timing, paths7[0])]);
         string projectPath = Path.Combine(dir, "patch.dpsurf.json");
@@ -531,18 +534,84 @@ endsolid patch
         var loaded7 = SurfaceProjectStore.Load(projectPath);
         var item7 = loaded7.Items.Single();
         Check(loaded7.Settings.NormalOffset == 2 && loaded7.Settings.Transform.Position.X == 1
-              && loaded7.Settings.Transform.Scale == 1.5 && item7.Path.Normals.Count == item7.Path.Points.Count,
-            "工程往返保留模型参数与逐点法向");
+              && loaded7.Settings.Transform.Scale == 1.5 && loaded7.Settings.PointSpacing == 2
+              && loaded7.Settings.NormalSmoothPasses == 3 && loaded7.Settings.NormalSmoothStrength == 0.6
+              && loaded7.Settings.MaxPoseStepDeg == 25 && item7.Path.Normals.Count == item7.Path.Points.Count,
+            "工程往返保留模型参数、P8 质量参数与逐点法向");
 
         var upload7 = JobAssembler.Assemble(new List<SurfacePath> { item7.Path }, item7.Feed, true, item7.Timing).Single();
         Check(upload7.OpenDelayMs == 20 && upload7.EarlyCloseMs == 30
               && upload7.CloseDelayMs == 40 && upload7.RetractMm == 3 && upload7.Normals is not null,
             "工程恢复后工艺时序与上传法向完整");
+
+        // 模拟 P7 旧工程: 没有 P8 新增字段时仍应能加载并使用兼容默认值
+        var legacy7 = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(projectPath))!.AsObject();
+        var legacySettings7 = legacy7["Settings"]!.AsObject();
+        legacySettings7.Remove("PointSpacing"); legacySettings7.Remove("NormalSmoothPasses");
+        legacySettings7.Remove("NormalSmoothStrength"); legacySettings7.Remove("MaxPoseStepDeg");
+        string legacyPath7 = Path.Combine(dir, "legacy-p7.dpsurf.json");
+        File.WriteAllText(legacyPath7, legacy7.ToJsonString());
+        var legacyLoaded7 = SurfaceProjectStore.Load(legacyPath7);
+        Check(legacyLoaded7.Settings.PointSpacing == 0 && legacyLoaded7.Settings.NormalSmoothPasses == 0
+              && legacyLoaded7.Settings.NormalSmoothStrength == 0.5 && legacyLoaded7.Settings.MaxPoseStepDeg == 30,
+            "P7 旧工程缺少 P8 字段时兼容加载");
     }
     finally
     {
         try { Directory.Delete(dir, recursive: true); } catch { }
     }
+}
+
+// ---------------- Test 7: P8 路径质量 + 上位机五轴预检查 ----------------
+Console.WriteLine("[7] P8 上位机: 等弧长 / 法向平滑 / C 轴连续 / 姿态与行程预检");
+{
+    var raw8 = new SurfacePath(
+        [new HostPoint(0, 0, 0), new HostPoint(2, 0, 0), new HostPoint(6, 0, 0)],
+        [new HostPoint(0, 0, 1), new HostPoint(0, 0, 1), new HostPoint(0, 0, 1)]);
+    var sampled8 = PathGenerator.ResampleSurfacePath(raw8, 2);
+    double spacingError8 = sampled8.Points.Zip(sampled8.Points.Skip(1), (a, b) => Math.Abs((b - a).Length - 2)).Max();
+    Check(sampled8.Points.Count == 4 && spacingError8 < 1e-9
+          && (sampled8.Points[0] - raw8.Points[0]).Length < 1e-9
+          && (sampled8.Points[^1] - raw8.Points[^1]).Length < 1e-9,
+        "非均匀折线按等弧长重采样且保留首尾", $"点={sampled8.Points.Count}, 误差={spacingError8:E2}");
+
+    var sharp8 = new SurfacePath(raw8.Points,
+        [new HostPoint(1, 0, 0), new HostPoint(0, 1, 0), new HostPoint(0, 0, 1)]);
+    var smooth8 = PathGenerator.SmoothSurfaceNormals(sharp8, 1, 0.5);
+    Check(smooth8.Normals.All(n => Math.Abs(n.Length - 1) < 1e-9)
+          && smooth8.Normals[1].X > 0 && smooth8.Normals[1].Z > 0
+          && smooth8.Normals.Zip(sharp8.Normals, (a, b) => HostPoint.Dot(a, b)).All(d => d >= 0),
+        "法向邻域平滑保持单位长度且不明显翻面");
+
+    double unwrapped8 = SurfacePathSafety.UnwrapAngleDeg(-179, 179);
+    Check(Math.Abs(unwrapped8 - 181) < 1e-9, "C 轴 -179° 相对 179° 连续化为 181°", $"C={unwrapped8:F2}");
+
+    AxisConfigDto Axis(string name, double min, double max) => new(name, min, max, 0, min, max, 0, 10);
+    var axes8 = new[] { Axis("x", -100, 100), Axis("y", -100, 100), Axis("z", -50, 100),
+        Axis("a", -105, 105), Axis("c", -360, 360) };
+    static HostPoint NormalForC(double c)
+    {
+        double r = c * Math.PI / 180;
+        return new HostPoint(-Math.Sin(r), Math.Cos(r), 0);
+    }
+    var seam8 = new SurfacePath(
+        [new HostPoint(0, 0, 10), new HostPoint(1, 0, 10), new HostPoint(2, 0, 10)],
+        [NormalForC(179), NormalForC(-179), NormalForC(-178)]);
+    var seamReport8 = SurfacePathSafety.Analyze([seam8], axes8, 20, 30);
+    Check(seamReport8.IsSafe && seamReport8.MaxCStepDeg < 2.1,
+        "跨 ±180° 的真实 2° 转动不被误报", $"maxC={seamReport8.MaxCStepDeg:F2}°");
+
+    var jump8 = new SurfacePath(seam8.Points, [NormalForC(0), NormalForC(90), NormalForC(90)]);
+    var jumpReport8 = SurfacePathSafety.Analyze([jump8], axes8, 20, 30);
+    Check(!jumpReport8.IsSafe && jumpReport8.MaxCStepDeg >= 89.9
+          && jumpReport8.Errors.Any(e => e.Contains("姿态突变")), "真实大姿态跳变被上位机阻止");
+
+    var overtravel8 = new SurfacePath(
+        [new HostPoint(150, 0, 10), new HostPoint(151, 0, 10)],
+        [NormalForC(0), NormalForC(0)]);
+    var travelReport8 = SurfacePathSafety.Analyze([overtravel8], axes8, 20, 30);
+    Check(!travelReport8.IsSafe && travelReport8.Errors.Any(e => e.Contains("X=") && e.Contains("超出行程")),
+        "枢轴行程超限被上位机定位到具体路径点");
 }
 
 Console.WriteLine();

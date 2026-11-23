@@ -332,8 +332,7 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
     Check(ev2.Any(m => m.Contains("RTCP 未开启")), "RTCP 关闭 + 法向路径 → 告警");
     ctl.SetRtcp(true);
 
-    // A 轴限位: 法向要求 A=120° 超出行程 → 限位告警
-    // TCP Z=40: A=120° 时枢轴 Z = 40-0.15-60·cos60°·(-1) ≈ 9.85mm, 高于 Z 负硬限位 2mm, 场景物理可达
+    // P8: A 轴行程超限从"运行中限位"提升为"上传时拒绝"
     var ev3 = new List<string>();
     ctl.OnEvent += (_, m) => ev3.Add(m);
     var steep = new List<JobStepDto>
@@ -342,14 +341,70 @@ Console.WriteLine("[6] 五轴 RTCP + 标定 (AC 双摆头, 出厂误差 A0.9°/C
             Normals: [[0, 0.87, 0.5], [0, 0.87, 0.5]]),
     };
     var steepPaths = JobBuilder.BuildPaths(steep);
-    bool done3 = false;
-    ctl.OnEvent += (_, m) => { if (m == "点胶作业完成") done3 = true; };
-    ctl.UploadPaths(steepPaths, PathSampler3D.Sample(steepPaths.SelectMany(p => p.Segments)), "steep");
-    ctl.RunJob();
-    for (int i = 0; i < 120 * 20 && !done3; i++) ctl.Tick(1.0 / 120);
-    Console.WriteLine("    steep events: " + string.Join(" | ", ev3.Take(10)));
-    Check(ev3.Any(m => m.Contains("超出行程")), "A 轴超限 (120°>105°) → 限位告警");
-    Check(Math.Abs(card.Read(Axes.A).Pos) <= 105.01, "A 角被限制在行程内", $"A={card.Read(Axes.A).Pos:F1}°");
+    bool accepted3 = ctl.UploadPaths(steepPaths, PathSampler3D.Sample(steepPaths.SelectMany(p => p.Segments)), "steep");
+    Check(!accepted3 && !ctl.IsRunning && ev3.Any(m => m.Contains("五轴预检查失败") && m.Contains("超出行程")),
+        "A 轴超限 (120°>105°) → 上传拒绝且不进入执行队列");
+}
+
+// ---------------- [7] P8 五轴路径安全 ----------------
+Console.WriteLine("[7] P8 服务层: C 轴连续化 + 全程序姿态/行程预检查");
+{
+    var card8 = new SimulatedDispenseCard();
+    var ctl8 = new DispenseController(card8, new CollisionChecker(card8), new DefaultInterpolationEngine());
+    ctl8.SetRtcp(true);
+    // 扩程仅用于验证跨 ±180° 连续运动; 默认 ±180° 的不可达作业由后续用例验证拒绝
+    card8.ConfigureAxis(Axes.C, new AxisConfig(-540, 540, 0, -538, 538, 0, 45));
+    static double[] NormalForC(double c)
+    {
+        double r = c * Math.PI / 180;
+        return [-Math.Sin(r), Math.Cos(r), 0];
+    }
+    var seamSteps8 = new List<JobStepDto>
+    {
+        new("dispense", null, [[0, 0, 40], [15, 0, 40], [30, 0, 40]], null, 60, true, 0,
+            Normals: [NormalForC(179), NormalForC(-179), NormalForC(-178)]),
+    };
+    var seamPaths8 = JobBuilder.BuildPaths(seamSteps8);
+    var report8 = FiveAxisPathGuard.Validate(seamPaths8, ctl8.Kinematics, ctl8.GetConfigs(), 30);
+    Check(report8.IsSafe && report8.MaxCStepDeg < 2.1,
+        "服务端预检将 179→-179° 识别为连续 2°", $"maxC={report8.MaxCStepDeg:F2}°");
+
+    bool done8 = false;
+    ctl8.OnEvent += (_, msg) => { if (msg == "点胶作业完成") done8 = true; };
+    bool accepted8 = ctl8.UploadPaths(seamPaths8, PathSampler3D.Sample(seamPaths8.SelectMany(p => p.Segments)), "p8-seam");
+    ctl8.RunJob();
+    var cSamples8 = new List<double>();
+    for (int i = 0; i < 120 * 30 && !done8; i++)
+    {
+        ctl8.Tick(1.0 / 120);
+        if (ctl8.ValveOn) cSamples8.Add(card8.Read(Axes.C).Pos);
+    }
+    double maxTickC8 = cSamples8.Zip(cSamples8.Skip(1), (a, b) => Math.Abs(b - a)).DefaultIfEmpty(999).Max();
+    Check(accepted8 && done8 && cSamples8.Any(c => c > 180) && maxTickC8 < 3,
+        "实际执行跨 ±180° 不反转且输出展开角", $"Cmax={cSamples8.DefaultIfEmpty().Max():F2}°, tickΔ={maxTickC8:F3}°");
+
+    var jumpPaths8 = JobBuilder.BuildPaths(
+    [
+        new JobStepDto("dispense", null, [[0, 0, 40], [30, 0, 40]], null, 60, true, 0,
+            Normals: [NormalForC(0), NormalForC(90)]),
+    ]);
+    var jumpEvents8 = new List<string>();
+    ctl8.OnEvent += (_, msg) => jumpEvents8.Add(msg);
+    bool acceptedJump8 = ctl8.UploadPaths(jumpPaths8, PathSampler3D.Sample(jumpPaths8.SelectMany(p => p.Segments)), "p8-jump");
+    Check(!acceptedJump8 && !ctl8.IsRunning && jumpEvents8.Any(m => m.Contains("姿态突变")),
+        "服务端拒绝真实大姿态跳变");
+
+    // 上传时安全不代表配置变更后仍安全, RunJob 必须再次检查
+    var constantPaths8 = JobBuilder.BuildPaths(
+    [
+        new JobStepDto("dispense", null, [[0, 0, 40], [30, 0, 40]], null, 60, true, 0,
+            Normals: [NormalForC(179), NormalForC(179)]),
+    ]);
+    bool acceptedBeforeConfig8 = ctl8.UploadPaths(constantPaths8, [], "p8-revalidate");
+    card8.ConfigureAxis(Axes.C, new AxisConfig(-10, 10, 0, -9, 9, 0, 45));
+    ctl8.RunJob();
+    Check(acceptedBeforeConfig8 && !ctl8.IsRunning && jumpEvents8.Any(m => m.Contains("C=179") && m.Contains("超出行程")),
+        "上传后轴行程变更, 运行前重新拒绝");
 }
 
 Console.WriteLine();

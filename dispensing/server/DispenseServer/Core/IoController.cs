@@ -96,7 +96,7 @@ public sealed class IoController
 
         var paths = JobBuilder.BuildPaths(program.Steps);
         if (paths.Count == 0) { _ctl.ReportEvent("error", $"IO 启动失败: 程序 {SelectBcd} 无有效路径"); return; }
-        _ctl.UploadPaths(paths, PathSampler3D.Sample(paths.SelectMany(p => p.Segments)), program.Name);
+        if (!_ctl.UploadPaths(paths, PathSampler3D.Sample(paths.SelectMany(p => p.Segments)), program.Name)) return;
         _ctl.RunJob();
         _ctl.ReportEvent("ok", $"IO 启动程序 {program.Id}: {program.Name}");
     }

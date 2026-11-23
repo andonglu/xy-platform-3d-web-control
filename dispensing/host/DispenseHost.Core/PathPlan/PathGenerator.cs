@@ -112,14 +112,20 @@ public sealed class PathGenerator
     }
 
     /// <summary>
-    /// P6: STL 曲面 → 等高层加工路径 + 逐点法向。
-    /// 切片交线始终携带来源三角面的法向; normalOffset 可沿法向生成等距偏置面路径。
-    /// 法向按顶点绕序的右手定则重建, 避免 STL 文件中的法向缺失或反向。
+    /// P6/P8: STL 曲面 → 等高层加工路径 + 逐点法向。
+    /// 法向按顶点绕序重建; 可等弧长重采样并在路径邻域内平滑法向。
+    /// pointSpacing=0 / normalSmoothPasses=0 时保持 P6 原始输出。
     /// </summary>
     public List<SurfacePath> GenerateSurfacePaths(
-        Mesh mesh, double zStart, double zEnd, double dz, double normalOffset = 0)
+        Mesh mesh, double zStart, double zEnd, double dz, double normalOffset = 0,
+        double pointSpacing = 0, int normalSmoothPasses = 0, double normalSmoothStrength = 0.5)
     {
         if (dz <= 0) throw new ArgumentException("dz 必须大于 0", nameof(dz));
+        if (pointSpacing < 0) throw new ArgumentException("布点间距不能小于 0", nameof(pointSpacing));
+        if (normalSmoothPasses < 0) throw new ArgumentException("平滑次数不能小于 0", nameof(normalSmoothPasses));
+        if (normalSmoothStrength is < 0 or > 1)
+            throw new ArgumentException("平滑强度必须在 0~1 之间", nameof(normalSmoothStrength));
+
         var result = new List<SurfacePath>();
         for (double z = zStart; z <= zEnd + 1e-9; z += dz)
         {
@@ -130,10 +136,74 @@ public sealed class PathGenerator
                 if (chain.Count < 2) continue;
                 var normals = chain.Select(p => p.Tag).ToList();
                 var points = chain.Select(p => p.Point + p.Tag * normalOffset).ToList();
-                result.Add(new SurfacePath(points, normals));
+                var path = new SurfacePath(points, normals);
+                if (pointSpacing > 0) path = ResampleSurfacePath(path, pointSpacing);
+                if (normalSmoothPasses > 0 && normalSmoothStrength > 0)
+                    path = SmoothSurfaceNormals(path, normalSmoothPasses, normalSmoothStrength);
+                result.Add(path);
             }
         }
         return result;
+    }
+
+    /// <summary>P8: 按弧长等距重采样, 保留首尾点; 相邻法向同步线性插值后归一化</summary>
+    public static SurfacePath ResampleSurfacePath(SurfacePath path, double spacing)
+    {
+        if (spacing <= 0) throw new ArgumentException("布点间距必须大于 0", nameof(spacing));
+        if (path.Points.Count != path.Normals.Count) throw new ArgumentException("路径点与法向数量不一致", nameof(path));
+        if (path.Points.Count < 2) return path;
+
+        var cumulative = new double[path.Points.Count];
+        for (int i = 1; i < cumulative.Length; i++)
+            cumulative[i] = cumulative[i - 1] + (path.Points[i] - path.Points[i - 1]).Length;
+        double total = cumulative[^1];
+        if (total < 1e-9) return path;
+
+        int intervals = Math.Max(1, (int)Math.Ceiling(total / spacing));
+        var points = new List<Point3D>(intervals + 1);
+        var normals = new List<Point3D>(intervals + 1);
+        int segment = 0;
+        for (int i = 0; i <= intervals; i++)
+        {
+            double distance = total * i / intervals;
+            while (segment < cumulative.Length - 2 && cumulative[segment + 1] < distance - 1e-12)
+                segment++;
+            double length = cumulative[segment + 1] - cumulative[segment];
+            double t = length < 1e-12 ? 0 : Math.Clamp((distance - cumulative[segment]) / length, 0, 1);
+            points.Add(path.Points[segment] + (path.Points[segment + 1] - path.Points[segment]) * t);
+            var normal = path.Normals[segment] * (1 - t) + path.Normals[segment + 1] * t;
+            normals.Add(normal.Normalize());
+        }
+        return new SurfacePath(points, normals);
+    }
+
+    /// <summary>P8: 沿单条路径做保向邻域平均, 闭合路径跨首尾平滑且不会把法向翻到反面</summary>
+    public static SurfacePath SmoothSurfaceNormals(SurfacePath path, int passes = 2, double strength = 0.5)
+    {
+        if (passes < 0) throw new ArgumentException("平滑次数不能小于 0", nameof(passes));
+        if (strength is < 0 or > 1) throw new ArgumentException("平滑强度必须在 0~1 之间", nameof(strength));
+        if (path.Points.Count != path.Normals.Count) throw new ArgumentException("路径点与法向数量不一致", nameof(path));
+        int count = path.Normals.Count;
+        if (count < 2 || passes == 0 || strength == 0) return path;
+
+        var current = path.Normals.Select(n => n.Normalize()).ToList();
+        bool closed = (path.Points[0] - path.Points[^1]).Length < 1e-6;
+        for (int pass = 0; pass < passes; pass++)
+        {
+            var next = new List<Point3D>(count);
+            for (int i = 0; i < count; i++)
+            {
+                int prev = i > 0 ? i - 1 : closed ? count - 2 : i;
+                int following = i < count - 1 ? i + 1 : closed ? 1 : i;
+                var neighbor = (current[prev] + current[following]).Normalize();
+                var candidate = (current[i] * (1 - strength) + neighbor * strength).Normalize();
+                // 大折角或反向面不参与平滑, 防止平均向量把刀具姿态翻到另一侧
+                next.Add(candidate.Length > 1e-9 && Point3D.Dot(candidate, current[i]) >= 0 ? candidate : current[i]);
+            }
+            if (closed) next[^1] = next[0];
+            current = next;
+        }
+        return new SurfacePath(path.Points, current);
     }
 
     private List<List<Point3D>> SliceAt(Mesh mesh, double zHeight)
