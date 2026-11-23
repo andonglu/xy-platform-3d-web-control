@@ -366,6 +366,126 @@ Console.WriteLine("[4] P5 五轴: WS 客户端 → RTCP 开关/标定 → 带法
     }
 }
 
+// ---------------- Test 5: P6 STL 曲面 → 带法向路径 → 五轴执行 ----------------
+Console.WriteLine("[5] P6 STL 曲面: 等高层路径 + 法向偏置 + RTCP 真实 TCP 贴合");
+{
+    const double radius = 30;
+    static Mesh MakeCylinderPatch(double r, double h, int n = 12)
+    {
+        var mesh = new Mesh();
+        for (int i = 0; i < n; i++)
+        {
+            double a0 = (-60 + 120.0 * i / n) * Math.PI / 180;
+            double a1 = (-60 + 120.0 * (i + 1) / n) * Math.PI / 180;
+            var b0 = new HostPoint(r * Math.Cos(a0), r * Math.Sin(a0), 0);
+            var b1 = new HostPoint(r * Math.Cos(a1), r * Math.Sin(a1), 0);
+            var t0 = new HostPoint(b0.X, b0.Y, h);
+            var t1 = new HostPoint(b1.X, b1.Y, h);
+            foreach (var tri in new[] { new Triangle(default, b0, b1, t1), new Triangle(default, b0, t1, t0) })
+            {
+                var normal = HostPoint.Cross(tri.V1 - tri.V0, tri.V2 - tri.V0).Normalize();
+                mesh.Triangles.Add(tri with { Normal = normal });
+            }
+        }
+        return mesh;
+    }
+
+    static double DistToPolyline6(SrvPoint p, List<HostPoint> pts)
+    {
+        double best = double.MaxValue;
+        for (int i = 0; i < pts.Count - 1; i++)
+        {
+            var a = new SrvPoint(pts[i].X, pts[i].Y, pts[i].Z);
+            var b = new SrvPoint(pts[i + 1].X, pts[i + 1].Y, pts[i + 1].Z);
+            var ab = b - a;
+            double t = Math.Clamp(SrvPoint.Dot(p - a, ab) / Math.Max(SrvPoint.Dot(ab, ab), 1e-9), 0, 1);
+            best = Math.Min(best, (p - (a + ab * t)).Length);
+        }
+        return best;
+    }
+
+    var gen6 = new PathGenerator();
+    var cylinder = MakeCylinderPatch(radius, h: 40);
+    var surface = gen6.GenerateSurfacePaths(cylinder, zStart: 20, zEnd: 20, dz: 10);
+    Check(surface.Count == 1 && surface[0].Points.Count >= 10,
+        "圆柱曲面切片生成单条加工路径", $"路径={surface.Count}, 点={surface.Sum(p => p.Points.Count)}");
+
+    var surfacePath = surface[0];
+    bool paired = surfacePath.Normals.Count == surfacePath.Points.Count;
+    double minDot = 1;
+    for (int i = 0; i < surfacePath.Points.Count; i++)
+    {
+        var p = surfacePath.Points[i];
+        var expected = new HostPoint(p.X / radius, p.Y / radius, 0).Normalize();
+        minDot = Math.Min(minDot, HostPoint.Dot(expected, surfacePath.Normals[i]));
+    }
+    Check(paired && minDot > 0.99, "逐点法向与圆柱解析法向对齐 (点积 > 0.99)", $"minDot={minDot:F5}");
+
+    var offset = gen6.GenerateSurfacePaths(cylinder, 20, 20, 10, normalOffset: 2);
+    bool offsetOk = offset.Count == 1;
+    if (offsetOk)
+    {
+        for (int i = 0; i < surfacePath.Points.Count; i++)
+        {
+            var expected = surfacePath.Points[i] + surfacePath.Normals[i] * 2;
+            if ((offset[0].Points[i] - expected).Length > 1e-8 ||
+                (offset[0].Normals[i] - surfacePath.Normals[i]).Length > 1e-8)
+                offsetOk = false;
+        }
+    }
+    Check(offsetOk, "normalOffset=2mm → 等距偏置且法向不变");
+
+    var steps6 = JobAssembler.Assemble(surface, feed: 80);
+    Check(steps6.Count == 1 && steps6[0].Normals?.Count == steps6[0].Points.Count,
+        "JobAssembler 保留逐点法向");
+
+    var dtoSteps6 = steps6.Select(s => new JobStepDto(
+        Kind: s.Kind, Target: null,
+        Points: s.Points.Select(p => new[] { p.X, p.Y, p.Z }).ToArray(),
+        ArcVia: null, Feed: s.Feed, ValveOn: s.ValveOn, DwellMs: 0,
+        Normals: s.Normals?.Select(n => new[] { n.X, n.Y, n.Z }).ToArray())).ToList();
+    var paths6 = JobBuilder.BuildPaths(dtoSteps6);
+    Check(paths6.Count == 1 && paths6[0].SegmentNormals?.Count == surfacePath.Points.Count - 1,
+        "服务端 JobBuilder 收到全部子段法向");
+
+    var card6 = new SimulatedDispenseCard();
+    var ctl6 = new DispenseController(card6, new CollisionChecker(card6), new DefaultInterpolationEngine());
+    ctl6.SetRtcp(true);
+    ctl6.CalibrateRtcp();
+    Check(ctl6.Kinematics.Calibrated && ctl6.LastCalibResidual < 0.001,
+        "P6 执行前 RTCP 标定", $"residual={ctl6.LastCalibResidual:E2}mm");
+
+    bool done6 = false;
+    ctl6.OnEvent += (_, msg) => { if (msg == "点胶作业完成") done6 = true; };
+    ctl6.UploadPaths(paths6, PathSampler3D.Sample(paths6.SelectMany(p => p.Segments)), "p6-stl-surface");
+    ctl6.RunJob();
+    var samples6 = new List<(double X, double Y, double Z, double A, double C)>();
+    const double dt6 = 1.0 / 120;
+    for (int i = 0; i < (int)(30 / dt6) && !done6 && !ctl6.CollisionAlarm; i++)
+    {
+        ctl6.Tick(dt6);
+        if (ctl6.ValveOn)
+            samples6.Add((card6.Read(Axes.X).Pos, card6.Read(Axes.Y).Pos, card6.Read(Axes.Z).Pos,
+                card6.Read(Axes.A).Pos, card6.Read(Axes.C).Pos));
+    }
+    Check(done6 && !ctl6.CollisionAlarm, "STL 曲面法向作业内存链路完成");
+    Check(samples6.Count > 20, "采集五轴开胶样本", $"n={samples6.Count}");
+
+    double maxDev6 = 0;
+    foreach (var s in samples6)
+        maxDev6 = Math.Max(maxDev6, DistToPolyline6(
+            ctl6.RealGeometry.Forward(new SrvPoint(s.X, s.Y, s.Z), s.A, s.C), surfacePath.Points));
+    Check(maxDev6 < 0.05, "标定后真实 TCP 贴合 STL 加工路径 (<0.05mm)", $"max={maxDev6:F4}mm");
+
+    if (samples6.Count > 0)
+    {
+        double cRange = samples6.Max(s => s.C) - samples6.Min(s => s.C);
+        double maxAError = samples6.Max(s => Math.Abs(s.A - 90));
+        Check(cRange > 100 && maxAError < 0.01,
+            "C 轴随圆柱法向回转, A 轴保持 90°", $"C范围={cRange:F1}°, A误差={maxAError:E2}°");
+    }
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL VERIFICATION PASSED" : $"{failures} CHECK(S) FAILED");
 return failures == 0 ? 0 : 1;

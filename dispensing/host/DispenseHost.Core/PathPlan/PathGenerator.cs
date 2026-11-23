@@ -53,6 +53,9 @@ public sealed class ModelTransform
     }
 }
 
+/// <summary>P6: 曲面加工路径, 每个路径点携带同位置的单位法向</summary>
+public sealed record SurfacePath(List<Point3D> Points, List<Point3D> Normals);
+
 /// <summary>
 /// 点胶路径生成器: 从变换后的网格提取边界边, 串成连续路径。
 /// 可选: 等高线切片 (Z 分层) / 边界轮廓 / 投影到 XY 平面。
@@ -108,17 +111,46 @@ public sealed class PathGenerator
         return layers;
     }
 
-    private List<List<Point3D>> SliceAt(Mesh mesh, double zHeight)
+    /// <summary>
+    /// P6: STL 曲面 → 等高层加工路径 + 逐点法向。
+    /// 切片交线始终携带来源三角面的法向; normalOffset 可沿法向生成等距偏置面路径。
+    /// 法向按顶点绕序的右手定则重建, 避免 STL 文件中的法向缺失或反向。
+    /// </summary>
+    public List<SurfacePath> GenerateSurfacePaths(
+        Mesh mesh, double zStart, double zEnd, double dz, double normalOffset = 0)
     {
-        var intersections = new List<(Point3D A, Point3D B)>();
+        if (dz <= 0) throw new ArgumentException("dz 必须大于 0", nameof(dz));
+        var result = new List<SurfacePath>();
+        for (double z = zStart; z <= zEnd + 1e-9; z += dz)
+        {
+            var segments = SliceSegmentsAt(mesh, z);
+            var chains = ChainTaggedEdges(segments);
+            foreach (var chain in chains)
+            {
+                if (chain.Count < 2) continue;
+                var normals = chain.Select(p => p.Tag).ToList();
+                var points = chain.Select(p => p.Point + p.Tag * normalOffset).ToList();
+                result.Add(new SurfacePath(points, normals));
+            }
+        }
+        return result;
+    }
+
+    private List<List<Point3D>> SliceAt(Mesh mesh, double zHeight)
+        => ChainEdges(SliceSegmentsAt(mesh, zHeight).Select(s => (s.A, s.B)).ToList());
+
+    private static List<(Point3D A, Point3D B, Point3D Tag)> SliceSegmentsAt(Mesh mesh, double zHeight)
+    {
+        var intersections = new List<(Point3D A, Point3D B, Point3D Tag)>();
         foreach (var tri in mesh.Triangles)
         {
             var seg = SliceTriangle(tri, zHeight);
-            if (seg.HasValue) intersections.Add(seg.Value);
+            if (!seg.HasValue) continue;
+            var normal = Point3D.Cross(tri.V1 - tri.V0, tri.V2 - tri.V0).Normalize();
+            if (normal.Length < 1e-9) continue;
+            intersections.Add((seg.Value.A, seg.Value.B, normal));
         }
-
-        var chains = ChainEdges(intersections.Select(s => (s.A, s.B)).ToList());
-        return chains;
+        return intersections;
     }
 
     /// <summary>
@@ -135,18 +167,23 @@ public sealed class PathGenerator
         return result;
     }
 
-    // ---- 辅助: 串接边 ----
+    // ---- 辅助: 串接边 (泛型 Tag 用于让曲面交点携带来源面法向) ----
     private static List<List<Point3D>> ChainEdges(List<(Point3D A, Point3D B)> edges)
+        => ChainTaggedEdges(edges.Select(e => (e.A, e.B, 0)).ToList())
+            .Select(chain => chain.Select(p => p.Point).ToList()).ToList();
+
+    private static List<List<(Point3D Point, T Tag)>> ChainTaggedEdges<T>(
+        List<(Point3D A, Point3D B, T Tag)> edges)
     {
-        var remaining = new List<(Point3D A, Point3D B)>(edges);
-        var chains = new List<List<Point3D>>();
+        var remaining = new List<(Point3D A, Point3D B, T Tag)>(edges);
+        var chains = new List<List<(Point3D Point, T Tag)>>();
 
         while (remaining.Count > 0)
         {
-            var chain = new List<Point3D>();
+            var chain = new List<(Point3D Point, T Tag)>();
             var first = remaining[0];
-            chain.Add(first.A);
-            chain.Add(first.B);
+            chain.Add((first.A, first.Tag));
+            chain.Add((first.B, first.Tag));
             remaining.RemoveAt(0);
 
             // 向前延伸
@@ -154,12 +191,12 @@ public sealed class PathGenerator
             while (found)
             {
                 found = false;
-                var tail = chain[^1];
+                var tail = chain[^1].Point;
                 for (int i = 0; i < remaining.Count; i++)
                 {
                     var e = remaining[i];
-                    if (Dist(e.A, tail) < 0.01) { chain.Add(e.B); remaining.RemoveAt(i); found = true; break; }
-                    if (Dist(e.B, tail) < 0.01) { chain.Add(e.A); remaining.RemoveAt(i); found = true; break; }
+                    if (Dist(e.A, tail) < 0.01) { chain.Add((e.B, e.Tag)); remaining.RemoveAt(i); found = true; break; }
+                    if (Dist(e.B, tail) < 0.01) { chain.Add((e.A, e.Tag)); remaining.RemoveAt(i); found = true; break; }
                 }
             }
 
@@ -168,12 +205,12 @@ public sealed class PathGenerator
             while (found)
             {
                 found = false;
-                var head = chain[0];
+                var head = chain[0].Point;
                 for (int i = 0; i < remaining.Count; i++)
                 {
                     var e = remaining[i];
-                    if (Dist(e.B, head) < 0.01) { chain.Insert(0, e.A); remaining.RemoveAt(i); found = true; break; }
-                    if (Dist(e.A, head) < 0.01) { chain.Insert(0, e.B); remaining.RemoveAt(i); found = true; break; }
+                    if (Dist(e.B, head) < 0.01) { chain.Insert(0, (e.A, e.Tag)); remaining.RemoveAt(i); found = true; break; }
+                    if (Dist(e.A, head) < 0.01) { chain.Insert(0, (e.B, e.Tag)); remaining.RemoveAt(i); found = true; break; }
                 }
             }
 

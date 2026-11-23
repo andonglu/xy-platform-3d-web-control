@@ -25,6 +25,12 @@ public static class JobAssembler
         List<List<Point3D>> paths, double feed, bool valveOn = true, DispenseTiming? timing = null)
         => paths.Where(p => p.Count >= 2).Select(p => MakeStep(p, feed, valveOn, timing)).ToList();
 
+    /// <summary>P6: 曲面路径 → 上传步骤 (逐点法向随 Points 一起下发, 用于 RTCP 五轴)</summary>
+    public static List<DispenseClient.UploadStep> Assemble(
+        List<SurfacePath> paths, double feed, bool valveOn = true, DispenseTiming? timing = null)
+        => paths.Where(p => p.Points.Count >= 2 && p.Normals.Count == p.Points.Count)
+            .Select(p => MakeStep(p.Points, feed, valveOn, timing, p.Normals)).ToList();
+
     /// <summary>DXF 实体 → 上传步骤 (图层/Z 已由导入器解析)</summary>
     public static List<DispenseClient.UploadStep> Assemble(
         List<DxfPath> entities, double feed, bool valveOn = true, DispenseTiming? timing = null)
@@ -41,10 +47,10 @@ public static class JobAssembler
         return steps;
     }
 
-    private static DispenseClient.UploadStep MakeStep(List<Point3D> pts, double feed, bool valveOn, DispenseTiming? t)
-        => t is null
-            ? new DispenseClient.UploadStep("dispense", pts, feed, valveOn)
-            : new DispenseClient.UploadStep("dispense", pts, feed, valveOn,
-                OpenDelayMs: t.OpenDelayMs, EarlyCloseMs: t.EarlyCloseMs,
-                CloseDelayMs: t.CloseDelayMs, RetractMm: t.RetractMm);
+    private static DispenseClient.UploadStep MakeStep(List<Point3D> pts, double feed, bool valveOn,
+        DispenseTiming? t, List<Point3D>? normals = null)
+        => new("dispense", pts, feed, valveOn,
+            OpenDelayMs: t?.OpenDelayMs ?? 0, EarlyCloseMs: t?.EarlyCloseMs ?? 0,
+            CloseDelayMs: t?.CloseDelayMs ?? 0, RetractMm: t?.RetractMm ?? 0,
+            Normals: normals);
 }
