@@ -54,6 +54,11 @@ public sealed class MainForm : Form
     private readonly Label _lblPosX = new(), _lblPosY = new(), _lblPosZ = new();
     private readonly Label _lblStX = new(), _lblStY = new(), _lblStZ = new();
     private readonly Label _lblSenX = new(), _lblSenY = new(), _lblSenZ = new();
+    // P5 五轴: A/C 摆头轴 + RTCP 状态
+    private readonly Label _lblPosA = new(), _lblPosC = new();
+    private readonly Label _lblStA = new(), _lblStC = new();
+    private readonly Label _lblSenA = new(), _lblSenC = new();
+    private readonly Label _lblRtcp = new();
     private readonly Label _lblValve = new(), _lblDevMode = new();
     private readonly TextBox _txtReport = new();
     private readonly ListBox _lstLog = new();
@@ -255,7 +260,7 @@ public sealed class MainForm : Form
     private Control BuildRightPanel()
     {
         var t = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(4) };
-        t.RowStyles.Add(new RowStyle(SizeType.Absolute, 244));
+        t.RowStyles.Add(new RowStyle(SizeType.Absolute, 352));   // P5: +A/C 轴行 +RTCP 行 +RTCP 按钮行
         t.RowStyles.Add(new RowStyle(SizeType.Percent, 48));
         t.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
 
@@ -267,9 +272,14 @@ public sealed class MainForm : Form
         s.AxisRow("X", _lblPosX, _lblStX, _lblSenX);
         s.AxisRow("Y", _lblPosY, _lblStY, _lblSenY);
         s.AxisRow("Z", _lblPosZ, _lblStZ, _lblSenZ);
+        // P5 五轴: A/C 摆头轴状态
+        _lblPosA.Font = _lblPosC.Font = _mono;
+        s.AxisRow("A", _lblPosA, _lblStA, _lblSenA);
+        s.AxisRow("C", _lblPosC, _lblStC, _lblSenC);
         s.Space(6);
         s.Line(_lblValve);
         s.Line(_lblDevMode);
+        s.Line(_lblRtcp);
 
         var btnHome = new Button { Text = "回零" };
         var btnEstop = new Button { Text = "急停" };
@@ -279,6 +289,20 @@ public sealed class MainForm : Form
         btnEstop.Click += async (_, _) => { if (_client is { IsConnected: true }) await _client.EstopAsync(); };
         btnReset.Click += async (_, _) => { if (_client is { IsConnected: true }) await _client.ResetAlarmAsync(); };
         s.Triple(btnHome, btnEstop, btnReset);
+
+        // P5 五轴: RTCP 开关 (按当前状态取反) + 标定
+        var btnRtcp = new Button { Text = "RTCP 开关" };
+        var btnCalib = new Button { Text = "RTCP 标定" };
+        StyleButton(btnRtcp, Accent); StyleButton(btnCalib, Accent);
+        btnRtcp.Click += async (_, _) =>
+        {
+            if (_client is { IsConnected: true }) await _client.RtcpAsync(!(_state.Rtcp?.Enabled ?? false));
+        };
+        btnCalib.Click += async (_, _) =>
+        {
+            if (_client is { IsConnected: true }) await _client.RtcpCalibrateAsync();
+        };
+        s.Buttons((btnRtcp, (_, _) => { }), (btnCalib, (_, _) => { }));
 
         // --- 测试报告 (TableLayout 明确分区, 不依赖父容器初始尺寸) ---
         var report = new GroupBox { Dock = DockStyle.Fill, Text = "测试报告", ForeColor = Accent, BackColor = CardBg, Font = _fontBold };
@@ -631,6 +655,13 @@ public sealed class MainForm : Form
         SetAxis(_lblPosX, _lblStX, _lblSenX, st.X);
         SetAxis(_lblPosY, _lblStY, _lblSenY, st.Y);
         SetAxis(_lblPosZ, _lblStZ, _lblSenZ, st.Z);
+        // P5 五轴: 三轴机型快照无 a/c 字段时保持空白
+        if (st.A is not null) SetAxis(_lblPosA, _lblStA, _lblSenA, st.A);
+        if (st.C is not null) SetAxis(_lblPosC, _lblStC, _lblSenC, st.C);
+        var rt = st.Rtcp;
+        _lblRtcp.Text = rt is null ? "RTCP: —" :
+            $"RTCP: {(rt.Enabled ? "开" : "关")}  {(rt.Calibrated ? $"已标定(残差{rt.ResidualMm:F3}mm)" : "未标定")}  针长{rt.ToolLength:F0}mm";
+        _lblRtcp.ForeColor = rt?.Calibrated == true ? Ok : Color.FromArgb(150, 165, 185);
         _lblValve.Text = st.Valve ? "胶阀: 开 ●" : "胶阀: 关 ○";
         _lblValve.ForeColor = st.Valve ? Ok : Color.FromArgb(150, 165, 185);
         _lblMode.Text = "模式: " + st.Mode;

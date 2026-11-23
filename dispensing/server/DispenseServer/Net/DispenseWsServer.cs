@@ -361,7 +361,8 @@ public sealed class DispenseWsServer : IDisposable
     public void Dispose()
     {
         _cts.Cancel();
-        _listener.Stop();
-        _listener.Close();
+        // Stop/Close 幂等: 监听器可能已随 AcceptLoop 异常退出而释放
+        try { _listener.Stop(); } catch (ObjectDisposedException) { }
+        try { _listener.Close(); } catch (ObjectDisposedException) { }
     }
 }

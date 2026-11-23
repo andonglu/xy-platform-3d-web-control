@@ -13,11 +13,15 @@ public sealed record AxisStateDto(
     double Pos, double Vel, string State,
     bool Home, bool LimPos, bool LimNeg);
 
+public sealed record RtcpStateDto(bool Enabled, bool Calibrated, double ResidualMm, double ToolLength);
+
 public sealed record MachineStateDto(
     double T,
     AxisStateDto X, AxisStateDto Y, AxisStateDto Z,
     bool Valve, string Mode,
-    bool Collision, string CollisionMsg, bool Homing)
+    bool Collision, string CollisionMsg, bool Homing,
+    AxisStateDto? A = null, AxisStateDto? C = null,   // P5: A/C 摆头轴 (五轴机型)
+    RtcpStateDto? Rtcp = null)                        // P5: RTCP 状态 (enabled/calibrated/residual/toolLength)
 {
     public static readonly MachineStateDto Empty = new(
         0,
@@ -250,6 +254,16 @@ public sealed class DispenseClient : IDisposable
             e.TryGetProperty("state", out var s) ? s.GetString() ?? "" : "",
             Sensor(e, "home"), Sensor(e, "limPos"), Sensor(e, "limNeg"));
 
+        static RtcpStateDto? ParseRtcp(JsonElement e)
+        {
+            if (!e.TryGetProperty("rtcp", out var r)) return null;
+            return new RtcpStateDto(
+                r.TryGetProperty("enabled", out var en) && en.GetBoolean(),
+                r.TryGetProperty("calibrated", out var ca) && ca.GetBoolean(),
+                r.TryGetProperty("residualMm", out var re) ? re.GetDouble() : 0,
+                r.TryGetProperty("toolLength", out var tl) ? tl.GetDouble() : 60);
+        }
+
         return new MachineStateDto(
             root.TryGetProperty("t", out var t) ? t.GetDouble() : 0,
             Axis(root.GetProperty("x")), Axis(root.GetProperty("y")), Axis(root.GetProperty("z")),
@@ -257,7 +271,10 @@ public sealed class DispenseClient : IDisposable
             root.TryGetProperty("mode", out var m) ? m.GetString() ?? "" : "",
             root.TryGetProperty("collision", out var c) && c.GetBoolean(),
             root.TryGetProperty("collisionMsg", out var cm) ? cm.GetString() ?? "" : "",
-            root.TryGetProperty("homing", out var hm) && hm.GetBoolean());
+            root.TryGetProperty("homing", out var hm) && hm.GetBoolean(),
+            root.TryGetProperty("a", out var a2) ? Axis(a2) : null,
+            root.TryGetProperty("c", out var c2) ? Axis(c2) : null,
+            ParseRtcp(root));
     }
 
     // ---------------- 上传 ----------------
@@ -267,7 +284,8 @@ public sealed class DispenseClient : IDisposable
     /// (openDelayMs/earlyCloseMs/closeDelayMs/retractMm, 服务端 P1 起支持, 默认 0 = 原行为)。
     /// </summary>
     public sealed record UploadStep(string Kind, List<Point3D> Points, double Feed, bool ValveOn,
-        double OpenDelayMs = 0, double EarlyCloseMs = 0, double CloseDelayMs = 0, double RetractMm = 0);
+        double OpenDelayMs = 0, double EarlyCloseMs = 0, double CloseDelayMs = 0, double RetractMm = 0,
+        List<Point3D>? Normals = null);   // P5: 与 Points 一一对应的曲面法向 (RTCP 五轴, 服务端 P4 起支持)
 
     /// <summary>上传点胶路径 (沿用 CLI 接口, 统一进给速度)</summary>
     public async Task UploadPathsAsync(string jobName, List<List<Point3D>> paths, double feed = 80)
@@ -293,6 +311,7 @@ public sealed class DispenseClient : IDisposable
             if (s.EarlyCloseMs > 0) dict["earlyCloseMs"] = s.EarlyCloseMs;
             if (s.CloseDelayMs > 0) dict["closeDelayMs"] = s.CloseDelayMs;
             if (s.RetractMm > 0) dict["retractMm"] = s.RetractMm;
+            if (s.Normals is not null) dict["normals"] = s.Normals.Select(n => new[] { n.X, n.Y, n.Z }).ToArray();
             return dict;
         }).ToArray();
 
@@ -353,6 +372,7 @@ public sealed class DispenseClient : IDisposable
             earlyCloseMs = s.EarlyCloseMs,
             closeDelayMs = s.CloseDelayMs,
             retractMm = s.RetractMm,
+            normals = s.Normals is null ? null : s.Normals.Select(n => new[] { n.X, n.Y, n.Z }).ToArray(),
         }).ToArray();
         await SendAsync(new { type = "program_save", name, steps = payloadSteps });
         OnLog?.Invoke($"程序保存已发送: {name}");
@@ -364,6 +384,18 @@ public sealed class DispenseClient : IDisposable
     public async Task ProgramDeleteAsync(int id) => await SendAsync(new { type = "program_delete", id });
     public async Task IoWriteAsync(string id, bool on) => await SendAsync(new { type = "io_write", id, on });
     public async Task IoListAsync() => await SendAsync(new { type = "io_list" });
+
+    // ---------------- 五轴 RTCP (P5) ----------------
+
+    /// <summary>RTCP 五轴模式开关 (服务端作业空闲时才允许切换)</summary>
+    public async Task RtcpAsync(bool on) => await SendAsync(new { type = "rtcp", on });
+
+    /// <summary>RTCP 标定: 服务端多姿态探测 + 7 参数联合拟合, 残差经事件与快照下发</summary>
+    public async Task RtcpCalibrateAsync() => await SendAsync(new { type = "rtcp_calibrate" });
+
+    /// <summary>配置工具长度 (枢轴到针尖距离, mm)</summary>
+    public async Task ConfigMachineAsync(double toolLengthMm)
+        => await SendAsync(new { type = "config_machine", toolLengthMm });
 
     private Task SendAsync(object msg) => SendTextAsync(JsonSerializer.Serialize(msg, JsonOpts));
 

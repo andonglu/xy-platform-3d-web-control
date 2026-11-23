@@ -3,7 +3,10 @@ using DispenseHost.Net;
 using DispenseHost.PathPlan;
 using DispenseServer.Core;
 using DispenseServer.Collision;
+using DispenseServer.Net;
+using System.Net;
 using HostPoint = DispenseHost.CadImport.Point3D;
+using SrvPoint = DispenseServer.Core.Point3D;
 
 // ---------------------------------------------------------------------------
 // P2 验证: DXF 导入 + 多 Z 分层切片 + 程序装配 + 服务端全链路执行
@@ -241,6 +244,126 @@ Console.WriteLine("[3] 全链路: DXF + 分层切片 → JobAssembler → Dispen
     int onIdx = log.FindIndex(t => t.Valve);
     double zMax = log.Skip(onIdx).Max(t => t.Z);
     Check(Math.Abs(zMax - 33) < 0.1, "retract → Zmax = 33", $"实际 {zMax:F2}");
+}
+
+// ---------------- Test 4: P5 五轴 RTCP 全 WebSocket 链路 ----------------
+Console.WriteLine("[4] P5 五轴: WS 客户端 → RTCP 开关/标定 → 带法向曲面执行 → TCP 精度");
+{
+    var card5 = new SimulatedDispenseCard();
+    var collision5 = new CollisionChecker(card5);
+    var ctl5 = new DispenseController(card5, collision5, new DefaultInterpolationEngine());
+    using var ws = new DispenseWsServer(ctl5, collision5, prefix: "http://127.0.0.1:8531/");
+    bool wsStarted = false;
+    try { ws.Start(); wsStarted = true; }
+    catch (HttpListenerException ex)
+    {
+        Console.WriteLine($"  SKIP  当前环境 HTTP.sys 不可用 ({ex.Message})，五轴 WS 链路验证需在本机非沙盒环境运行");
+    }
+    if (wsStarted)
+    {
+    using var drive = new CancellationTokenSource();
+    _ = Task.Run(() =>
+    {
+        while (!drive.IsCancellationRequested)
+        {
+            ctl5.Tick(1.0 / 120);   // 碰撞检测由控制器 Tick 内部驱动
+            Thread.Sleep(8);
+        }
+    });
+
+    static async Task WaitUntil(Func<bool> cond, int timeoutMs = 3000)
+    {
+        int t0 = Environment.TickCount;
+        while (!cond() && Environment.TickCount - t0 < timeoutMs) await Task.Delay(20);
+    }
+    static double DistToPolyline(SrvPoint p, List<HostPoint> pts)
+    {
+        double best = double.MaxValue;
+        for (int i = 0; i < pts.Count - 1; i++)
+        {
+            var a = new SrvPoint(pts[i].X, pts[i].Y, pts[i].Z);
+            var b = new SrvPoint(pts[i + 1].X, pts[i + 1].Y, pts[i + 1].Z);
+            var ab = b - a;
+            double t = Math.Clamp(SrvPoint.Dot(p - a, ab) / Math.Max(SrvPoint.Dot(ab, ab), 1e-9), 0, 1);
+            best = Math.Min(best, (p - (a + ab * t)).Length);
+        }
+        return best;
+    }
+
+    using var client = new DispenseClient("ws://127.0.0.1:8531/ws");
+    try
+    {
+    var doneTcs = new TaskCompletionSource();
+    var calibTcs = new TaskCompletionSource();
+    client.OnEventData += (_, msg) =>
+    {
+        if (msg == "点胶作业完成") doneTcs.TrySetResult();
+        if (msg.StartsWith("RTCP 标定完成")) calibTcs.TrySetResult();
+    };
+    var samples = new List<(double X, double Y, double Z, double A, double C)>();
+    client.OnState += st =>
+    {
+        if (st.Valve && st.A is not null && st.C is not null)
+            lock (samples) samples.Add((st.X.Pos, st.Y.Pos, st.Z.Pos, st.A.Pos, st.C.Pos));
+    };
+
+    await client.ConnectAsync();
+    Check(client.IsConnected, "WS 连接服务端 (8531)");
+
+    await client.RtcpAsync(true);
+    await WaitUntil(() => client.LastState.Rtcp?.Enabled == true);
+    Check(client.LastState.Rtcp?.Enabled == true, "rtcp on → 快照 enabled=true");
+
+    await client.RtcpCalibrateAsync();
+    await Task.WhenAny(calibTcs.Task, Task.Delay(8000));
+    Check(calibTcs.Task.IsCompleted, "rtcp_calibrate → 标定完成事件");
+    await WaitUntil(() => client.LastState.Rtcp?.Calibrated == true);
+    var rt = client.LastState.Rtcp;
+    Check(rt?.Calibrated == true && rt.ResidualMm < 0.05, "快照 calibrated + 残差 < 0.05mm",
+        $"residual={rt?.ResidualMm:E2}mm, toolLength={rt?.ToolLength:F0}mm");
+
+    // 圆柱面: X 向进给, Y/Z 沿 R=60 圆弧, 法向随弧变化 (与服务层 [6] 同场景)
+    const double Rc = 60;
+    var pts5 = new List<HostPoint>();
+    var nrm5 = new List<HostPoint>();
+    for (int i = 0; i <= 4; i++)
+    {
+        double th = (60.0 / 4 * i) * Math.PI / 180;
+        pts5.Add(new HostPoint(-40 + 20.0 * i, Rc * Math.Sin(th), 8 + Rc * (1 - Math.Cos(th))));
+        nrm5.Add(new HostPoint(0, Math.Sin(th), -Math.Cos(th)));
+    }
+    await client.UploadStepsAsync("p5-surface", [
+        new DispenseClient.UploadStep("dispense", pts5, 80, true, Normals: nrm5)]);
+    await client.RunJobAsync();
+    await Task.WhenAny(doneTcs.Task, Task.Delay(30000));
+    Check(doneTcs.Task.IsCompleted, "带法向曲面作业经 WS 完成");
+
+    int nSamples;
+    lock (samples) nSamples = samples.Count;
+    Check(nSamples > 20, "五轴状态样本 (A/C 角经快照回传)", $"n={nSamples}");
+
+    double aMin = 0, aMax = 0;
+    lock (samples)
+    {
+        if (nSamples > 0)
+        {
+            aMin = samples.Min(s => s.A);
+            aMax = samples.Max(s => s.A);
+        }
+    }
+    Check(aMax - aMin > 30, "A 轴随曲面法向摆动 (>30°)", $"A∈[{aMin:F1}°, {aMax:F1}°]");
+
+    // 用服务端真实机床几何核算 TCP 偏离 (标定后应≈0)
+    double maxDev = 0;
+    lock (samples)
+        foreach (var s in samples)
+            maxDev = Math.Max(maxDev, DistToPolyline(
+                ctl5.RealGeometry.Forward(new SrvPoint(s.X, s.Y, s.Z), s.A, s.C), pts5));
+    Check(maxDev < 0.05, "标定后真实 TCP 偏离 < 0.05mm (全 WS 链路)", $"max={maxDev:F4}mm");
+    }
+    catch (Exception ex) { Check(false, "P5 链路异常", ex.Message); }
+    drive.Cancel();
+    }
 }
 
 Console.WriteLine();
