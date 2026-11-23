@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>P9 CAD 生产仿真与人工配置需求</title>
+<style>
+:root{--bg:#f3f6f5;--paper:#fff;--ink:#17211d;--muted:#607069;--line:#dce5e1;--brand:#087b54;--brand2:#e8f5ef;--warn:#9a5b00;--warnbg:#fff6e6;--danger:#b42318;--code:#eef2f0;--shadow:0 10px 30px rgba(24,52,40,.07)}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.75 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+a{color:var(--brand);text-decoration:none}button,input,select,textarea{font:inherit}button{cursor:pointer}.wrap{max-width:1240px;margin:0 auto;padding:28px}.hero{background:#153d30;color:#fff;padding:38px 42px;border-radius:18px;box-shadow:var(--shadow)}
+.hero h1{margin:0 0 12px;font-size:30px;line-height:1.35}.hero p{max-width:920px;margin:8px 0;color:#dcebe5}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}.chip{display:inline-block;padding:3px 10px;border-radius:999px;background:#285446;color:#e8f5ef;font-size:12px}.chip.light{background:var(--brand2);color:var(--brand)}
+.layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:24px;margin-top:24px}.toc{position:sticky;top:20px;align-self:start;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:18px}.toc strong{display:block;margin-bottom:8px}.toc a{display:block;padding:6px 8px;color:var(--muted);border-radius:7px}.toc a:hover{background:var(--brand2);color:var(--brand)}
+main{min-width:0}.section{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:28px;margin-bottom:22px;box-shadow:var(--shadow)}h2{margin:0 0 18px;font-size:22px;line-height:1.4}h3{margin:26px 0 10px;font-size:17px}h4{margin:20px 0 8px;font-size:15px}p{margin:8px 0}.muted{color:var(--muted)}.small{font-size:12px}.lead{font-size:15px}.callout{padding:14px 16px;border-left:4px solid var(--brand);background:var(--brand2);border-radius:8px;margin:14px 0}.callout.warn{border-color:#d58a1f;background:var(--warnbg)}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.card{border:1px solid var(--line);border-radius:10px;padding:16px;background:#fff}.card h3,.card h4{margin-top:0}.card p:last-child{margin-bottom:0}
+table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13px}th,td{padding:10px 11px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:#f1f6f3;font-weight:600}td code,code{padding:1px 5px;border-radius:5px;background:var(--code);font-family:Consolas,monospace;font-size:12px}tr:hover td{background:#fbfdfc}
+.req{border-top:3px solid var(--brand);margin-top:26px;padding-top:10px}.req-id{color:var(--brand);font-weight:700;letter-spacing:.04em}.flow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:14px 0}.flow span{padding:7px 11px;background:#f1f6f3;border:1px solid var(--line);border-radius:8px}.flow b{color:var(--brand)}ul,ol{padding-left:22px}li{margin:4px 0}.rule{padding:10px 14px;border-bottom:1px solid var(--line)}.rule:last-child{border-bottom:0}
+.prototype{background:#f7faf8;border:1px solid #bfd8cc;border-radius:12px;padding:18px;margin:18px 0}.proto-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}.proto-head h3{margin:0}.badge{display:inline-block;padding:2px 9px;border-radius:999px;background:#edf1ef;color:var(--muted);font-size:12px}.badge.ok{background:var(--brand2);color:var(--brand)}.badge.err{background:#fdecea;color:var(--danger)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:16px}.tab{border:0;background:transparent;padding:9px 12px;color:var(--muted);border-bottom:2px solid transparent}.tab.active{color:var(--brand);border-color:var(--brand);font-weight:600}.tab-panel{display:none}.tab-panel.active{display:block}.form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.field{display:flex;flex-direction:column;gap:4px}.field.full{grid-column:1/-1}.field label{font-size:12px;color:var(--muted)}.field input,.field select,.field textarea{width:100%;border:1px solid #c9d6d0;border-radius:7px;padding:7px 9px;background:#fff;color:var(--ink)}.field textarea{min-height:64px;resize:vertical}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.btn{border:1px solid #bdcec5;background:#fff;color:var(--ink);border-radius:7px;padding:7px 13px}.btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}.btn:disabled{opacity:.45;cursor:not-allowed}.feedback{margin-top:12px;padding:10px 12px;border-radius:7px;background:#edf1ef;color:var(--muted);min-height:42px}.feedback.ok{background:var(--brand2);color:var(--brand)}.feedback.err{background:#fdecea;color:var(--danger)}
+.viewport{min-height:160px;border:1px dashed #aac4b7;border-radius:9px;background:linear-gradient(135deg,#f7faf8,#edf4f0);display:grid;place-items:center;text-align:center;padding:20px;color:var(--muted);margin-bottom:14px}.state-track{display:flex;gap:5px;flex-wrap:wrap;margin:12px 0}.state-track span{font-size:12px;padding:4px 8px;border-radius:6px;background:#edf1ef}.state-track span.active{background:var(--brand2);color:var(--brand);font-weight:600}.footer{color:var(--muted);text-align:center;padding:10px 0 30px;font-size:12px}
+@media(max-width:960px){.layout{grid-template-columns:1fr}.toc{position:static}.form-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.grid3{grid-template-columns:1fr}.hero{padding:28px}.wrap{padding:16px}}
+@media(max-width:600px){.grid2,.form-grid{grid-template-columns:1fr}.section{padding:20px}table{display:block;overflow-x:auto}.hero h1{font-size:24px}}
+@media print{body{background:#fff}.wrap{max-width:none;padding:0}.toc,.prototype{display:none}.layout{display:block}.section{box-shadow:none;break-inside:avoid}.hero{box-shadow:none;background:#fff;color:#000;border:1px solid #ccc}.hero p{color:#333}.chip{color:#000;background:#eee}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <h1>P9：CAD 生产仿真与人工配置需求</h1>
+  <p>把 CAD 模型、工件位姿、夹具、点胶区域、上料参数和生产过程纳入同一个可配置、可保存、可仿真的作业。人工负责工艺与设备事实，系统负责坐标计算、路径生成、校验和状态执行。</p>
+  <div class="meta"><span class="chip">需求评审稿</span><span class="chip">版本 1.0</span><span class="chip">日期 2026-11-23</span><span class="chip">范围：点胶上位机 / 服务 / Web 仿真</span></div>
+</header>
+<div class="layout">
+<nav class="toc">
+  <strong>文档目录</strong>
+  <a href="#background">1. 背景与目标</a>
+  <a href="#scope">2. 范围与角色</a>
+  <a href="#model">3. 核心对象与流程</a>
+  <a href="#functional">4. 功能需求</a>
+  <a href="#fr01">FR-01 模型同步</a>
+  <a href="#fr02">FR-02 工件与夹具</a>
+  <a href="#fr03">FR-03 点胶区域与路径</a>
+  <a href="#fr04">FR-04 上料与装夹</a>
+  <a href="#fr05">FR-05 生产仿真</a>
+  <a href="#fr06">FR-06 工程保存</a>
+  <a href="#rules">5. 共享规则</a>
+  <a href="#open">6. 待确认事项</a>
+</nav>
+<main>
+<section class="section" id="background">
+  <h2>1. 背景与目标</h2>
+  <p class="lead">当前系统已支持上位机解析 STL/DXF、生成带法向路径、三轴/五轴模拟执行和 Web 路径预览，但原始 CAD 没有同步到服务端，工件坐标、夹具、上料和连续生产也尚未形成完整配置流程。</p>
+  <div class="callout"><strong>核心产品决策：</strong>需要人工确定的工艺和设备信息，必须提供明确窗口接收并保存；系统不得仅凭 STL 猜测抓取位置、夹紧方式或应涂胶区域。</div>
+  <div class="grid2">
+    <div class="card"><h3>当前问题</h3><ul><li>上位机上传路径而非原始模型，Web 无法恢复同一工件场景。</li><li>模型平移旋转已有，但没有正式工件坐标系和夹具配置。</li><li>几何轮廓可生成路径，但“哪里需要点胶”缺少人工标注入口。</li><li>只有单件加工执行，没有上料、装夹、下料和批次循环。</li></ul></div>
+    <div class="card"><h3>目标结果</h3><ul><li>人工可在一个工程中完成全部必要设置。</li><li>上位机、服务和 Web 对模型及机器坐标保持一致理解。</li><li>配置错误在仿真前被阻止并定位到具体字段或路径。</li><li>无需真实硬件即可连续模拟多件生产过程和异常恢复。</li></ul></div>
+  </div>
+</section>
+<section class="section" id="scope">
+  <h2>2. 范围与角色</h2>
+  <h3>2.1 P0：本阶段必须完成的最小闭环</h3>
+  <ol><li>导入原始 CAD 并同步到服务端和 Web。</li><li>人工设置夹具、工件位置与朝向，预览机器坐标。</li><li>人工选择点胶面、边、轮廓或 DXF 实体并配置工艺。</li><li>人工设置虚拟抓取、放置、夹紧、下料和传感器参数。</li><li>执行单件及连续生产仿真，支持暂停、停止、复位和失败重试。</li><li>保存并重新加载完整工程。</li></ol>
+  <h3>2.2 P1：后续增强，不作为 P0 完成条件</h3>
+  <ul><li>探针、三点找正和视觉自动定位。</li><li>自动识别密封面、粘接面等工艺语义。</li><li>复杂曲面自动填充和测地等距路径。</li><li>真实 PLC、机器人、输送线和质量检测设备接入。</li></ul>
+  <h3>2.3 角色与职责</h3>
+  <table><thead><tr><th>角色</th><th>主要职责</th><th>本阶段操作边界</th></tr></thead><tbody>
+    <tr><td>工艺工程师</td><td>确定模型、坐标、夹具、点胶区域、工艺和上料参数。</td><td>在上位机创建、编辑、校验和保存工程。</td></tr>
+    <tr><td>操作员</td><td>加载已配置工程，执行仿真和处理暂停/失败。</td><td>可运行、单步、停止和复位；不修改工艺字段。</td></tr>
+    <tr><td>系统</td><td>接收人工数据并自动计算、校验和同步。</td><td>生成机器坐标、路径与五轴姿态；不替代人工做工艺判断。</td></tr>
+  </tbody></table>
+  <p class="muted">本阶段不引入账号、审批或权限管理系统，上述角色用于定义操作职责。</p>
+  <div class="callout"><strong>编辑入口：</strong>人工工艺配置统一放在 DispenseStudio；Web 用于同步场景、仿真操作和结果查看，避免双端同时编辑造成数据与坐标不一致。</div>
+</section>
+<section class="section" id="model">
+  <h2>3. 核心对象与完整流程</h2>
+  <div class="grid3">
+    <div class="card"><h4>模型 Model</h4><p>原始 STL、显示名称、单位、文件标识和同步状态。DXF 作为轮廓来源，不冒充三维实体。</p></div>
+    <div class="card"><h4>工件放置 Placement</h4><p>模型在夹具中的平移、旋转和缩放，以及关联的夹具。</p></div>
+    <div class="card"><h4>夹具 Fixture</h4><p>夹具机器位姿、机械定位方式、夹紧动作和到位条件。</p></div>
+    <div class="card"><h4>点胶区域 DispenseRegion</h4><p>人工选中的面、边、轮廓、切片范围及其工艺参数。</p></div>
+    <div class="card"><h4>上料配方 LoadingRecipe</h4><p>抓取、搬运、放置、夹紧、松开和下料所需的人工设置。</p></div>
+    <div class="card"><h4>生产作业 ProductionJob</h4><p>上述对象的统一工程，以及仿真状态、批次计数和事件记录。</p></div>
+  </div>
+  <h3>核心流程</h3>
+  <div class="flow"><span>导入 CAD</span><b>→</b><span>设置工件与夹具</span><b>→</b><span>标注点胶区域</span><b>→</b><span>配置上料</span><b>→</b><span>校验并保存</span><b>→</b><span>连续生产仿真</span></div>
+  <p><strong>进入条件：</strong>工艺工程师新建工程或加载已有工程。<strong>完成条件：</strong>模型与配置同步成功，至少一件工件完成上料、装夹、点胶、下料，且全部状态与失败原因可查看。</p>
+</section>
+<section class="section" id="functional">
+<h2>4. 功能需求</h2>
+<p>以下窗口均为需要开发的实际功能。文末原型仅用于评审布局和交互，不连接真实模型或设备。</p>
+
+<div class="prototype" id="prototype">
+  <div class="proto-head"><h3>人工配置窗口交互原型</h3><span class="badge" id="projectBadge">配置草稿</span></div>
+  <div class="tabs">
+    <button type="button" class="tab active" data-tab="model">模型</button><button type="button" class="tab" data-tab="fixture">工件与夹具</button><button type="button" class="tab" data-tab="region">点胶区域</button><button type="button" class="tab" data-tab="loading">上料装夹</button><button type="button" class="tab" data-tab="production">生产仿真</button>
+  </div>
+  <div class="tab-panel active" data-panel="model">
+    <div class="viewport">统一三维场景<br>模型 / 夹具 / 路径 / 针尖<br><span class="small">原型占位，不实现 CAD 渲染</span></div>
+    <div class="form-grid"><div class="field full"><label>原始 STL 文件</label><input id="demoFile" type="file" accept=".stl,.dxf"></div><div class="field"><label>源文件单位</label><select><option>mm</option><option>cm</option><option>inch</option></select></div><div class="field"><label>显示名称</label><input value="示例工件"></div><div class="field"><label>同步状态</label><input id="syncState" value="未同步" readonly></div></div>
+    <div class="actions"><button type="button" class="btn primary" data-action="sync">模拟同步模型</button></div>
+  </div>
+  <div class="tab-panel" data-panel="fixture">
+    <div class="form-grid"><div class="field"><label>夹具名称 *</label><input id="fixtureName" value="A 号定位夹具"></div><div class="field"><label>机器原点 X / Y / Z (mm)</label><input value="200 / 150 / 20"></div><div class="field"><label>夹具旋转 Rx / Ry / Rz (°)</label><input value="0 / 0 / 0"></div><div class="field"><label>机械固定方式</label><select><option>定位销 + 气动压紧</option><option>挡块 + 压板</option><option>真空吸附</option></select></div><div class="field"><label>工件偏移 X / Y / Z</label><input value="0 / 0 / 0"></div><div class="field"><label>工件旋转 Rx / Ry / Rz</label><input value="0 / 0 / 0"></div><div class="field"><label>缩放</label><input id="demoScale" type="number" value="1" min="0.0001" step="0.1"></div><div class="field"><label>夹紧到位条件</label><select><option>虚拟 CLAMP_OK</option><option>仅手动确认</option></select></div></div>
+    <div class="actions"><button type="button" class="btn primary" data-action="placement">校验工件位姿</button><button type="button" class="btn">从场景读取</button><button type="button" class="btn">恢复工程值</button></div>
+  </div>
+  <div class="tab-panel" data-panel="region">
+    <div class="form-grid"><div class="field"><label>区域名称 *</label><input id="regionName" value="密封边 01"></div><div class="field"><label>几何来源</label><select><option>人工选择边</option><option>人工选择面</option><option>DXF 轮廓</option><option>Z 等高切片</option></select></div><div class="field"><label>Z 起 / 止 (mm)</label><input id="regionZ" value="2 / 4"></div><div class="field"><label>路径方向</label><select><option>正向</option><option>反向</option></select></div><div class="field"><label>法向偏置 (mm)</label><input type="number" value="0.5" step="0.1"></div><div class="field"><label>布点间距 (mm)</label><input id="demoSpacing" type="number" value="2" min="0.01"></div><div class="field"><label>进给 (mm/s)</label><input type="number" value="60" min="1"></div><div class="field"><label>法向处理</label><select><option>保持 + 平滑</option><option>反向 + 平滑</option><option>仅保持</option></select></div></div>
+    <div class="actions"><button type="button" class="btn">添加选中区域</button><button type="button" class="btn primary" data-action="path">生成并校验路径</button></div>
+  </div>
+  <div class="tab-panel" data-panel="loading">
+    <div class="form-grid"><div class="field"><label>来料方式</label><select><option>托盘</option><option>输送线</option><option>人工放入</option></select></div><div class="field"><label>抓取位姿 XYZ / RxRyRz</label><input value="100 / 0 / 80 / 0 / 0 / 0"></div><div class="field"><label>放置位置</label><select><option>A 号定位夹具</option></select></div><div class="field"><label>夹具动作序列</label><select><option>定位 → 夹紧 → 检测</option></select></div><div class="field"><label>工件到位信号</label><input value="PART_PRESENT"></div><div class="field"><label>夹紧到位信号</label><input value="CLAMP_OK"></div><div class="field"><label>接近 / 抬升高度 (mm)</label><input value="30 / 50"></div><div class="field"><label>批次数量</label><input type="number" value="3" min="1"></div></div>
+    <div class="actions"><button type="button" class="btn primary" data-action="load">单步模拟上料</button><button type="button" class="btn">单步模拟下料</button></div>
+  </div>
+  <div class="tab-panel" data-panel="production">
+    <div class="state-track" id="stateTrack"><span class="active">待上料</span><span>上料中</span><span>待加工</span><span>点胶中</span><span>待下料</span><span>已完成</span></div>
+    <div class="card"><strong>启动前检查</strong><p class="muted">模型已同步；工件与夹具已设置；至少一个点胶区域；路径预检通过；上料与夹紧配置完整。</p><p>当前状态：<strong id="productionState">待上料</strong>　完成数量：<strong id="pieceCount">0</strong></p></div>
+    <div class="actions"><button type="button" class="btn primary" data-action="start">开始仿真</button><button type="button" class="btn" data-action="step">单步推进</button><button type="button" class="btn" data-action="pause">暂停 / 继续</button><button type="button" class="btn" data-action="stop">停止并复位</button></div>
+  </div>
+  <div class="feedback" id="demoFeedback">请选择上方窗口查看人工输入。所有按钮只演示产品行为。</div>
+</div>
+
+<article class="req" id="fr01">
+  <div class="req-id">FR-01</div><h3>CAD 模型导入与场景同步</h3>
+  <p><strong>目的：</strong>让上位机、服务端和 Web 使用同一份原始模型、同一个模型 ID 和同一位姿，不再只传路径线。</p>
+  <h4>窗口与触发</h4><p>工程师在“模型”窗口选择 STL 或 DXF。STL 进入三维模型列表；DXF 进入轮廓来源列表。导入后显示模型、单位确认、同步状态和错误信息。</p>
+  <h4>处理规则与结果</h4><ul><li>导入成功后保留原始文件内容，解析失败不得生成空模型。</li><li>模型同步成功前，工程保持“配置草稿”，不能进入完整生产仿真。</li><li>Web 按工程位姿显示模型；相机自动居中只能改变观察视角，不能修改机器坐标。</li><li>替换已被引用的模型时，要求重新确认区域与路径；删除被引用模型时阻止并显示引用位置。</li></ul>
+  <table><thead><tr><th>人工输入</th><th>必填</th><th>默认/选项</th><th>校验与反馈</th></tr></thead><tbody>
+    <tr><td>原始文件</td><td>是</td><td>STL / DXF</td><td>无法读取、格式不支持或内容为空时显示具体失败原因。</td></tr>
+    <tr><td>显示名称</td><td>是</td><td>取文件名</td><td>同一工程内名称不可重复。</td></tr>
+    <tr><td>源文件单位</td><td>是</td><td>mm；可选 cm、inch</td><td>导入时确认，系统统一换算为 mm；未确认时禁止生成路径。</td></tr>
+    <tr><td>模型用途</td><td>是</td><td>工件 / 夹具 / 仅轮廓</td><td>“仅轮廓”不要求生成三维实体。</td></tr>
+    <tr><td>重新导入</td><td>否</td><td>保留名称和 ID</td><td>几何变化后使原路径标记为“需重新生成”。</td></tr>
+  </tbody></table>
+  <p><strong>异常恢复：</strong>同步中断时保留本地工程和已输入字段，状态显示“同步失败”，允许重试；不得把上次成功状态当作本次成功。</p>
+</article>
+
+<article class="req" id="fr02">
+  <div class="req-id">FR-02</div><h3>工件坐标系、夹具与机械固定设置</h3>
+  <p><strong>目的：</strong>明确工件在机器中的实际位置和朝向，并把机械固定事实转化为仿真启动条件。</p>
+  <h4>窗口与触发</h4><p>“工件与夹具”窗口分为夹具库、工件放置、机械固定和坐标预览四区。工程师选择夹具后输入工件相对夹具的位姿；点击“应用”后更新场景和机器坐标。</p>
+  <h4>坐标规则</h4><div class="callout"><code>T_M_C = T_M_F × T_F_C</code><br>工件点使用完整位姿变换；法向只使用旋转部分并重新单位化。每个变换只能应用一次。</div>
+  <p>旋转单位为 °，顺序固定为 Rx → Ry → Rz；位置单位为 mm。系统同时显示选中的 CAD 坐标和换算后的机器坐标。</p>
+  <table><thead><tr><th>夹具人工输入</th><th>必填</th><th>默认/选项</th><th>校验与说明</th></tr></thead><tbody>
+    <tr><td>夹具名称 / 编号</td><td>是</td><td>无</td><td>工程内唯一；编号保存后作为引用。</td></tr>
+    <tr><td>机器原点 X/Y/Z</td><td>是</td><td>0 / 0 / 0 mm</td><td>必须是有限数值，并做机器可达性检查。</td></tr>
+    <tr><td>夹具旋转 Rx/Ry/Rz</td><td>是</td><td>0 / 0 / 0°</td><td>按统一旋转顺序解释。</td></tr>
+    <tr><td>机械定位方式</td><td>是</td><td>定位销、挡块、压板、真空、其他</td><td>“其他”必须填写说明。</td></tr>
+    <tr><td>夹紧方式与动作顺序</td><td>是</td><td>可编辑有序列表</td><td>至少包含夹紧和松开动作。</td></tr>
+    <tr><td>工件到位条件</td><td>是</td><td>虚拟信号 / 人工确认</td><td>完整生产仿真必须满足后才能加工。</td></tr>
+    <tr><td>夹紧到位条件</td><td>是</td><td>虚拟信号 / 人工确认</td><td>未满足时禁止点胶并显示阻断原因。</td></tr>
+  </tbody></table>
+  <table><thead><tr><th>工件放置输入</th><th>必填</th><th>默认值</th><th>校验与说明</th></tr></thead><tbody>
+    <tr><td>关联模型与夹具</td><td>是</td><td>当前选择</td><td>任一缺失时不能应用。</td></tr>
+    <tr><td>工件偏移 X/Y/Z</td><td>是</td><td>0 mm</td><td>表示工件相对夹具的位置。</td></tr>
+    <tr><td>工件旋转 Rx/Ry/Rz</td><td>是</td><td>0°</td><td>表示工件相对夹具的朝向。</td></tr>
+    <tr><td>统一缩放</td><td>是</td><td>1</td><td>必须大于 0；改变后路径需重新生成。</td></tr>
+    <tr><td>法向全局反向</td><td>否</td><td>关闭</td><td>仅用于修正模型绕序错误；应用前必须预览。</td></tr>
+  </tbody></table>
+  <p><strong>结果：</strong>应用成功后保存工件放置并更新 Web 场景；任何位置、朝向或缩放变化都会将相关路径标为“需重新生成”，避免继续执行旧坐标。</p>
+</article>
+
+<article class="req" id="fr03">
+  <div class="req-id">FR-03</div><h3>人工点胶区域标注与路径生成</h3>
+  <p><strong>目的：</strong>由工程师明确“哪里需要点胶”，系统根据选中几何和工艺参数生成路径，不自动猜测工艺语义。</p>
+  <h4>窗口与触发</h4><p>“点胶区域”窗口提供三维选择、区域列表、工艺参数和路径预览。工程师选择面、边、连续轮廓、DXF 实体或切片范围，点击“添加区域”后设置工艺并生成路径。</p>
+  <table><thead><tr><th>人工输入</th><th>必填</th><th>默认/选项</th><th>处理与校验</th></tr></thead><tbody>
+    <tr><td>区域名称</td><td>是</td><td>区域 01…</td><td>工程内唯一。</td></tr>
+    <tr><td>几何来源</td><td>是</td><td>面 / 边 / 轮廓 / DXF / Z 切片</td><td>空选择不能生成；保存时保留几何引用。</td></tr>
+    <tr><td>路径模式</td><td>是</td><td>边界 / 等高轮廓</td><td>面的内部填充属于 P1。</td></tr>
+    <tr><td>Z 起止与层间距</td><td>切片时必填</td><td>读取模型范围；层间距 1 mm</td><td>Z 止不得小于 Z 起；层间距必须大于 0。</td></tr>
+    <tr><td>起点与方向</td><td>是</td><td>自动起点 / 正向</td><td>可反向、选择最近起点；闭合轮廓保持闭合。</td></tr>
+    <tr><td>法向方向</td><td>五轴必填</td><td>保持 / 反向</td><td>显示法向箭头；零法向阻止生成。</td></tr>
+    <tr><td>法向偏置</td><td>是</td><td>0 mm</td><td>按法向偏移 TCP，预览偏移后位置。</td></tr>
+    <tr><td>等弧长间距</td><td>是</td><td>2 mm；0 表示原始点</td><td>不得小于 0；大于 0 时保留首尾点。</td></tr>
+    <tr><td>平滑次数与强度</td><td>是</td><td>2 次 / 0.5</td><td>次数为非负整数，强度范围 0~1。</td></tr>
+    <tr><td>最大姿态步长</td><td>五轴必填</td><td>30°</td><td>范围 1~30°，超限阻止执行。</td></tr>
+    <tr><td>进给速度</td><td>是</td><td>60 mm/s</td><td>必须大于 0，并满足设备能力。</td></tr>
+    <tr><td>开阀前延时</td><td>是</td><td>0 ms</td><td>不得小于 0。</td></tr>
+    <tr><td>提前关胶 / 关胶保持</td><td>是</td><td>0 ms</td><td>不得小于 0。</td></tr>
+    <tr><td>退枪高度</td><td>是</td><td>0 mm</td><td>不得小于 0，并检查上方空间。</td></tr>
+  </tbody></table>
+  <h4>生成结果</h4><ol><li>按最终工件位姿转换几何。</li><li>按区域设置提取边界或切片轮廓并串接。</li><li>计算法向、偏置、等弧长布点和平滑。</li><li>生成带 points + normals 的加工段。</li><li>执行三轴可达性或五轴姿态/行程预检查。</li><li>在场景中显示路径、方向、起点和法向；保存到区域。</li></ol>
+  <p><strong>异常：</strong>空区域、无效法向、路径少于两个点、超行程或姿态突变均使区域变为“无效”；错误定位到区域和路径点，修改后允许只重新生成该区域。</p>
+</article>
+
+<article class="req" id="fr04">
+  <div class="req-id">FR-04</div><h3>自动上料、装夹与下料人工配置</h3>
+  <p><strong>目的：</strong>将人工确定的自动化动作转换为可重复执行的虚拟生产步骤。</p>
+  <div class="callout warn"><strong>边界：</strong>P0 只模拟动作和 IO，不直接驱动真实机器人、气缸或输送线。模型文件本身不包含抓取和夹紧知识，以下字段必须人工设置。</div>
+  <table><thead><tr><th>人工输入</th><th>必填</th><th>默认/选项</th><th>校验与用途</th></tr></thead><tbody>
+    <tr><td>生产模式</td><td>是</td><td>仅加工 / 完整生产</td><td>仅加工可跳过上下料，但仍需工件与夹具条件。</td></tr>
+    <tr><td>来料方式</td><td>完整生产必填</td><td>托盘 / 输送线 / 人工放入</td><td>决定等待来料和到位行为。</td></tr>
+    <tr><td>抓取位姿</td><td>完整生产必填</td><td>XYZ + RxRyRz</td><td>可从场景拾取或手动输入。</td></tr>
+    <tr><td>放置位置</td><td>完整生产必填</td><td>选择夹具中的工件放置</td><td>不得与抓取位姿混用。</td></tr>
+    <tr><td>接近 / 抬升高度</td><td>是</td><td>30 / 50 mm</td><td>不得小于 0。</td></tr>
+    <tr><td>抓取与释放动作</td><td>是</td><td>有序动作列表</td><td>动作顺序可编辑，缺少释放时阻止连续循环。</td></tr>
+    <tr><td>工件到位信号</td><td>是</td><td>PART_PRESENT / 人工确认</td><td>未到位时保持等待或进入失败，不自动跳过。</td></tr>
+    <tr><td>夹紧到位信号</td><td>是</td><td>CLAMP_OK / 人工确认</td><td>未满足时禁止点胶。</td></tr>
+    <tr><td>允许放置误差</td><td>是</td><td>[TBD] mm / °</td><td>用于判断仿真上料是否需要报警，不自动修正工艺坐标。</td></tr>
+    <tr><td>下料位置</td><td>完整生产必填</td><td>XYZ + RxRyRz</td><td>完成后工件离开夹具并解除占用。</td></tr>
+    <tr><td>动作等待时间</td><td>是</td><td>各动作 0 ms</td><td>不得小于 0，仅影响仿真节拍。</td></tr>
+    <tr><td>批次数量</td><td>是</td><td>1 件</td><td>正整数；达到数量后正常停止。</td></tr>
+  </tbody></table>
+  <p><strong>单步操作：</strong>工程师可分别执行“模拟上料、夹紧、松开、下料”，每一步显示前置条件、执行结果和当前工件位置。前置条件不满足时保持原状态并说明原因。</p>
+</article>
+
+<article class="req" id="fr05">
+  <div class="req-id">FR-05</div><h3>单件与连续生产仿真</h3>
+  <p><strong>目的：</strong>在真实硬件接入前验证完整生产顺序、阻断条件和异常恢复，而不只验证针尖轨迹。</p>
+  <h4>启动前检查</h4><ul><li>模型同步成功且工程没有未应用的位姿修改。</li><li>工件、夹具、机械固定和坐标设置完整。</li><li>至少一个有效点胶区域，所有待执行路径已重新生成并通过预检。</li><li>完整生产模式下，上料、装夹、下料和批次配置完整。</li></ul>
+  <table><thead><tr><th>状态</th><th>进入条件</th><th>允许操作</th><th>离开条件</th></tr></thead><tbody>
+    <tr><td>待上料</td><td>启动检查通过，夹具空闲</td><td>开始、单步、停止</td><td>收到来料后进入上料中</td></tr>
+    <tr><td>上料中</td><td>抓取与放置动作执行</td><td>暂停、停止</td><td>工件到位且放置成功</td></tr>
+    <tr><td>待加工</td><td>工件到位、夹紧到位</td><td>开始点胶、单步、下料</td><td>点胶命令被接受</td></tr>
+    <tr><td>点胶中</td><td>路径开始执行</td><td>暂停、停止</td><td>路径完成或发生错误</td></tr>
+    <tr><td>待下料</td><td>加工完成</td><td>下料、停止</td><td>松夹并允许移出工件</td></tr>
+    <tr><td>下料中</td><td>工件搬运离开夹具</td><td>暂停、停止</td><td>夹具空闲，完成数加一</td></tr>
+    <tr><td>已完成</td><td>达到批次数量</td><td>复位、查看记录</td><td>复位后回到待上料</td></tr>
+    <tr><td>已暂停</td><td>人工暂停</td><td>继续、停止</td><td>继续回到原状态</td></tr>
+    <tr><td>已阻止</td><td>任一安全或配置条件失败</td><td>查看原因、复位、重试</td><td>原因解除并人工确认后恢复</td></tr>
+  </tbody></table>
+  <p><strong>记录：</strong>每件工件显示序号、开始/结束状态、所用工程、当前步骤、失败原因和完成数量。P0 的“加工完成”只表示轨迹和配置流程完成，不代表真实胶量或粘接质量合格。</p>
+  <p><strong>停止与重试：</strong>停止后立即关闭虚拟胶阀并保持当前工件占用状态；操作员必须选择“从当前步骤重试”或“复位并重新上料”，系统不得静默跳过失败步骤。</p>
+</article>
+
+<article class="req" id="fr06">
+  <div class="req-id">FR-06</div><h3>完整工程保存、加载与失效标记</h3>
+  <p><strong>目的：</strong>人工输入和系统生成结果必须作为同一工程恢复，避免重新设置或误用旧路径。</p>
+  <h4>保存内容</h4><ul><li>原始模型及模型引用、单位、显示名称。</li><li>夹具、机械固定、工件放置和坐标参数。</li><li>点胶区域、几何引用、工艺参数、生成路径和法向。</li><li>上料、装夹、下料和批次设置。</li><li>工程数据版本及必要的兼容默认值。</li></ul>
+  <h4>行为规则</h4><ul><li>字段修改后显示“未保存”；保存成功显示时间和工程名称。</li><li>模型、位姿或区域几何改变时，不自动删除旧路径，但必须将其标为“需重新生成”并阻止执行。</li><li>加载时缺少源模型，允许重新关联文件；未重新关联前可查看配置，但不能启动完整生产仿真。</li><li>旧版本工程缺少新增字段时使用明确默认值并提示用户检查，不能静默把关键安全参数设为零。</li><li>加载失败不覆盖当前已打开工程。</li></ul>
+</article>
+</section>
+<section class="section" id="rules">
+  <h2>5. 共享规则与异常边界</h2>
+  <div class="card rule"><strong>唯一坐标事实：</strong>执行使用机器坐标；工件坐标和夹具坐标用于人工理解与配置。视图缩放、旋转和平移不改变任何加工数据。</div>
+  <div class="card rule"><strong>人工输入优先级：</strong>抓取、放置、固定、点胶区域和工艺参数以人工保存值为准；自动计算结果必须可预览、可重新生成。</div>
+  <div class="card rule"><strong>单位统一：</strong>内部位置和路径以 mm、角度以 °、时间以 ms、进给以 mm/s 表示；窗口必须显示单位。</div>
+  <div class="card rule"><strong>同步不是执行许可：</strong>模型同步成功只代表场景一致；坐标、路径、行程、装夹等检查仍须分别通过。</div>
+  <div class="card rule"><strong>错误不静默降级：</strong>模型缺失、法向无效、超行程、夹紧失败、上料失败均显示阻断原因，不得继续假装生产。</div>
+  <div class="card rule"><strong>仿真与真实设备隔离：</strong>所有仿真窗口持续显示“模拟运行”，不得把虚拟 IO 成功解释为真实传感器成功。</div>
+  <div class="card rule"><strong>数据修改后的失效：</strong>影响几何或坐标的修改使路径失效；影响上料顺序的修改使生产配置重新校验。</div>
+</section>
+<section class="section" id="open">
+  <h2>6. 待确认事项</h2>
+  <table><thead><tr><th>事项</th><th>当前处理</th><th>需要人工确认的内容</th></tr></thead><tbody>
+    <tr><td>实际夹具与传感器</td><td>[TBD]</td><td>夹具类型、定位方式、夹紧动作和真实信号名称。</td></tr>
+    <tr><td>实际上料机构</td><td>[TBD]</td><td>机器人、龙门、输送线或人工上料，以及抓取工具。</td></tr>
+    <tr><td>允许上料误差</td><td>[TBD]</td><td>位置与角度容差；超过容差是报警还是重新定位。</td></tr>
+    <tr><td>模型规模上限</td><td>[TBD]</td><td>需要支持的 STL 文件大小和三角形数量。</td></tr>
+    <tr><td>质量检测</td><td>P0 不判断真实胶量</td><td>后续是否接入视觉、称重或胶宽检测。</td></tr>
+    <tr><td>Web 编辑</td><td>P0 仅上位机编辑</td><td>后续是否允许 Web 修改工艺；如允许需补充并发编辑规则。</td></tr>
+  </tbody></table>
+</section>
+</main>
+</div>
+<div class="footer">P9 CAD 生产仿真与人工配置需求 · 本文件用于产品、界面与工程联合评审</div>
+</div>
+<script>
+(function(){
+  const tabs=[...document.querySelectorAll('.tab')];
+  const panels=[...document.querySelectorAll('.tab-panel')];
+  const feedback=document.getElementById('demoFeedback');
+  const badge=document.getElementById('projectBadge');
+  function say(text,ok){feedback.textContent=text;feedback.className='feedback '+(ok===true?'ok':ok===false?'err':'');}
+  tabs.forEach(btn=>btn.addEventListener('click',()=>{tabs.forEach(x=>x.classList.toggle('active',x===btn));panels.forEach(p=>p.classList.toggle('active',p.dataset.panel===btn.dataset.tab));say('当前窗口：'+btn.textContent+'。此处演示人工输入和系统反馈。');}));
+  const states=['待上料','上料中','待加工','点胶中','待下料','已完成'];
+  let stateIndex=0,paused=false;
+  function renderState(){
+    document.getElementById('productionState').textContent=paused?'已暂停':states[stateIndex];
+    document.getElementById('pieceCount').textContent=stateIndex===states.length-1?'1':'0';
+    [...document.getElementById('stateTrack').children].forEach((x,i)=>x.classList.toggle('active',i===stateIndex));
+  }
+  document.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',()=>{
+    switch(btn.dataset.action){
+      case 'sync':{
+        const file=document.getElementById('demoFile');
+        if(!file.files.length){say('请先选择 STL 或 DXF 文件。原型不会读取文件内容。',false);return;}
+        document.getElementById('syncState').value='同步成功';badge.textContent='模型已同步';badge.className='badge ok';say('已模拟接收“'+file.files[0].name+'”。实际功能应同步原始模型、单位和模型 ID。',true);break;
+      }
+      case 'placement':{
+        if(!document.getElementById('fixtureName').value.trim()){say('夹具名称不能为空。',false);return;}
+        if(Number(document.getElementById('demoScale').value)<=0){say('缩放必须大于 0。',false);return;}
+        badge.textContent='位姿已更新';badge.className='badge ok';say('位姿校验通过。实际功能应更新机器坐标，并把旧路径标为需重新生成。',true);break;
+      }
+      case 'path':{
+        if(!document.getElementById('regionName').value.trim()){say('区域名称不能为空。',false);return;}
+        if(Number(document.getElementById('demoSpacing').value)<0){say('布点间距不能小于 0。',false);return;}
+        const z=document.getElementById('regionZ').value.split('/').map(Number);if(z.length===2&&z[1]<z[0]){say('Z 止不能小于 Z 起。',false);return;}
+        badge.textContent='路径已生成';badge.className='badge ok';say('已模拟路径生成与预检。实际功能应显示路径点、法向和任何阻断原因。',true);break;
+      }
+      case 'load':stateIndex=1;paused=false;renderState();say('单步上料完成：工件到位并等待夹紧确认。',true);break;
+      case 'start':stateIndex=0;paused=false;renderState();badge.textContent='仿真运行中';badge.className='badge ok';say('启动检查通过，进入待上料。点击“单步推进”查看生产状态。',true);break;
+      case 'step':stateIndex=Math.min(stateIndex+1,states.length-1);paused=false;renderState();say('当前步骤：'+states[stateIndex]+'。',true);break;
+      case 'pause':paused=!paused;renderState();say(paused?'仿真已暂停，保留当前工件和步骤。':'仿真继续。',true);break;
+      case 'stop':stateIndex=0;paused=false;renderState();badge.textContent='配置草稿';badge.className='badge';say('已停止并复位演示状态；实际系统应保留事件记录和失败原因。');break;
+    }
+  }));
+})();
+</script>
+</body>
+</html>
