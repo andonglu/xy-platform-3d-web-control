@@ -486,6 +486,65 @@ Console.WriteLine("[5] P6 STL 曲面: 等高层路径 + 法向偏置 + RTCP 真�
     }
 }
 
+// ---------------- Test 6: P7 STL 文件导入 + 曲面工程持久化 ----------------
+Console.WriteLine("[6] P7 上位机: STL 文件导入 → 曲面作业 → 工程保存/加载");
+{
+    string dir = Path.Combine(AppContext.BaseDirectory, "p7-verify");
+    Directory.CreateDirectory(dir);
+    try
+    {
+        const string asciiStl = """
+solid patch
+facet normal 1 0 0
+ outer loop
+  vertex 0 -10 0
+  vertex 0 10 0
+  vertex 0 10 20
+ endloop
+endfacet
+facet normal 1 0 0
+ outer loop
+  vertex 0 -10 0
+  vertex 0 10 20
+  vertex 0 -10 20
+ endloop
+endfacet
+endsolid patch
+""";
+        string stlPath = Path.Combine(dir, "patch.stl");
+        File.WriteAllText(stlPath, asciiStl);
+        var imported = StlImporter.Import(stlPath);
+        Check(imported.Triangles.Count == 2, "P7 从磁盘导入 ASCII STL", $"三角面={imported.Triangles.Count}");
+
+        var paths7 = new PathGenerator().GenerateSurfacePaths(imported, 10, 10, 1, normalOffset: 2);
+        Check(paths7.Count == 1 && paths7[0].Points.All(p => Math.Abs(p.X - 2) < 1e-8)
+              && paths7[0].Normals.All(n => Math.Abs(n.X - 1) < 1e-8),
+            "导入模型生成带法向偏置路径", $"路径={paths7.Count}");
+
+        var settings7 = new SurfaceProjectSettings(10, 10, 1, 2, 80,
+            new DispenseTiming(20, 30, 40, 3),
+            new ModelTransform { Position = new HostPoint(1, 2, 3), Scale = 1.5 });
+        var project7 = new SurfaceProject(1, stlPath, settings7,
+            [new SurfaceJobItem("测试曲面", 80, settings7.Timing, paths7[0])]);
+        string projectPath = Path.Combine(dir, "patch.dpsurf.json");
+        SurfaceProjectStore.Save(projectPath, project7);
+        var loaded7 = SurfaceProjectStore.Load(projectPath);
+        var item7 = loaded7.Items.Single();
+        Check(loaded7.Settings.NormalOffset == 2 && loaded7.Settings.Transform.Position.X == 1
+              && loaded7.Settings.Transform.Scale == 1.5 && item7.Path.Normals.Count == item7.Path.Points.Count,
+            "工程往返保留模型参数与逐点法向");
+
+        var upload7 = JobAssembler.Assemble(new List<SurfacePath> { item7.Path }, item7.Feed, true, item7.Timing).Single();
+        Check(upload7.OpenDelayMs == 20 && upload7.EarlyCloseMs == 30
+              && upload7.CloseDelayMs == 40 && upload7.RetractMm == 3 && upload7.Normals is not null,
+            "工程恢复后工艺时序与上传法向完整");
+    }
+    finally
+    {
+        try { Directory.Delete(dir, recursive: true); } catch { }
+    }
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL VERIFICATION PASSED" : $"{failures} CHECK(S) FAILED");
 return failures == 0 ? 0 : 1;

@@ -1,5 +1,7 @@
 using System.Text;
+using DispenseHost.CadImport;
 using DispenseHost.Net;
+using DispenseHost.PathPlan;
 using DispenseHost.PatternPlan;
 using DispenseHost.Testing;
 
@@ -28,6 +30,13 @@ public sealed class MainForm : Form
     private bool _testing;
     private string _lastReport = "";
 
+    // P7: STL 曲面模型 / 待加入预览 / 已加入作业
+    private Mesh? _sourceMesh;
+    private Mesh? _transformedMesh;
+    private string _sourceStl = "";
+    private List<SurfacePath> _surfacePreview = [];
+    private readonly List<SurfaceJobItem> _surfaceItems = [];
+
     // 顶部
     private readonly TextBox _txtUrl = new();
     private readonly Button _btnConnect = new();
@@ -44,6 +53,15 @@ public sealed class MainForm : Form
     private readonly CheckBox _chkClosed = new(), _chkCcw = new();
     private readonly Panel _pnlCircle = new(), _pnlRect = new();
     private readonly Label _lblPreviewInfo = new();
+
+    // P7: STL 曲面加工参数
+    private readonly Label _lblStl = new(), _lblSurfaceInfo = new();
+    private readonly NumericUpDown _numTx = new(), _numTy = new(), _numTz = new();
+    private readonly NumericUpDown _numRx = new(), _numRy = new(), _numRz = new(), _numScale = new();
+    private readonly NumericUpDown _numZStart = new(), _numZEnd = new(), _numLayer = new(), _numOffset = new();
+    private readonly NumericUpDown _numSurfaceFeed = new();
+    private readonly NumericUpDown _numOpenDelay = new(), _numEarlyClose = new();
+    private readonly NumericUpDown _numCloseDelay = new(), _numRetract = new();
 
     // 作业
     private readonly ListBox _lstJob = new();
@@ -63,6 +81,8 @@ public sealed class MainForm : Form
     private readonly TextBox _txtReport = new();
     private readonly ListBox _lstLog = new();
     private readonly PatternCanvas _canvas = new();
+    private readonly SurfaceCanvas _surfaceCanvas = new();
+    private readonly TabControl _viewTabs = new();
 
     private static readonly Color PanelBg = Color.FromArgb(24, 29, 39);
     private static readonly Color CardBg = Color.FromArgb(31, 38, 50);
@@ -116,9 +136,17 @@ public sealed class MainForm : Form
         BuildLeftPanel(left);
         root.Controls.Add(left, 0, 1);
 
+        // P7: 平面图案保留 2D 俯视; STL 曲面使用可旋转的 3D 预览
+        _viewTabs.Dock = DockStyle.Fill;
+        var page2d = new TabPage("平面 2D") { BackColor = PanelBg };
+        var page3d = new TabPage("STL 曲面 3D") { BackColor = PanelBg };
         _canvas.Dock = DockStyle.Fill;
-        _canvas.Margin = new Padding(4);
-        root.Controls.Add(_canvas, 1, 1);
+        _surfaceCanvas.Dock = DockStyle.Fill;
+        page2d.Controls.Add(_canvas);
+        page3d.Controls.Add(_surfaceCanvas);
+        _viewTabs.Controls.Add(page2d);
+        _viewTabs.Controls.Add(page3d);
+        root.Controls.Add(_viewTabs, 1, 1);
 
         root.Controls.Add(BuildRightPanel(), 2, 1);
         Controls.Add(root);
@@ -219,8 +247,52 @@ public sealed class MainForm : Form
         _lblPreviewInfo.Text = "尚未生成图案";
         _lblPreviewInfo.ForeColor = Color.FromArgb(150, 165, 185);
         b.Line(_lblPreviewInfo);
+        var btnImportDxf = new Button { Text = "导入 DXF 并加入平面作业..." };
+        StyleButton(btnImportDxf, Accent);
+        b.Full(btnImportDxf);
+        btnImportDxf.Click += (_, _) => ImportDxf();
 
-        b.Section("② 点胶作业");
+        b.Section("② STL 曲面加工 (P7)");
+        var btnImportStl = new Button { Text = "导入 STL 模型..." };
+        StyleButton(btnImportStl, Accent);
+        b.Full(btnImportStl);
+        btnImportStl.Click += (_, _) => ImportStl();
+        _lblStl.Text = "尚未导入模型";
+        _lblStl.Height = 36;
+        _lblStl.ForeColor = Color.FromArgb(150, 165, 185);
+        b.Full(_lblStl);
+
+        b.Num("平移 X (mm)", _numTx, 0, -500, 500);
+        b.Num("平移 Y (mm)", _numTy, 0, -500, 500);
+        b.Num("平移 Z (mm)", _numTz, 0, -500, 500);
+        b.Num("旋转 X (°)", _numRx, 0, -360, 360);
+        b.Num("旋转 Y (°)", _numRy, 0, -360, 360);
+        b.Num("旋转 Z (°)", _numRz, 0, -360, 360);
+        b.Num("缩放", _numScale, 1, 0.001m, 100, 3);
+        b.Num("切片 Z 起点", _numZStart, 0, -500, 500);
+        b.Num("切片 Z 终点", _numZEnd, 20, -500, 500);
+        b.Num("层间距 (mm)", _numLayer, 5, 0.1m, 100);
+        b.Num("法向偏置 (mm)", _numOffset, 0, -100, 100);
+        b.Num("曲面进给 (mm/s)", _numSurfaceFeed, 60, 1, 300);
+        b.Num("开阀延时 (ms)", _numOpenDelay, 0, 0, 10000, 0);
+        b.Num("提前关胶 (ms)", _numEarlyClose, 0, 0, 10000, 0);
+        b.Num("关胶保持 (ms)", _numCloseDelay, 0, 0, 10000, 0);
+        b.Num("退枪高度 (mm)", _numRetract, 0, 0, 50);
+
+        var btnSurfacePlan = new Button { Text = "生成曲面路径" };
+        var btnSurfaceAdd = new Button { Text = "加入作业" };
+        StyleButton(btnSurfacePlan, Accent);
+        b.Buttons((btnSurfacePlan, (_, _) => GenerateSurface()), (btnSurfaceAdd, (_, _) => AddSurfaceToJob()));
+        _lblSurfaceInfo.Text = "导入 STL 后生成等高层带法向路径";
+        _lblSurfaceInfo.ForeColor = Color.FromArgb(150, 165, 185);
+        b.Line(_lblSurfaceInfo);
+
+        var btnSaveProject = new Button { Text = "保存曲面工程" };
+        var btnLoadProject = new Button { Text = "加载曲面工程" };
+        b.Buttons((btnSaveProject, (_, _) => SaveSurfaceProject()),
+                  (btnLoadProject, (_, _) => LoadSurfaceProject()));
+
+        b.Section("③ 点胶作业");
         _lstJob.Height = 104;
         b.Full(_lstJob);
         _lblJobInfo.Text = "0 段 / 0 点 / 0.0 mm";
@@ -230,7 +302,7 @@ public sealed class MainForm : Form
         var btnRemove = new Button { Text = "移除选中" };
         var btnClear = new Button { Text = "清空作业" };
         b.Buttons((btnRemove, (_, _) => RemoveSelected()), (btnClear, (_, _) => ClearJob()));
-        btnClear.Click += (_, _) => _canvas.ClearTrail();
+        btnClear.Click += (_, _) => { _canvas.ClearTrail(); _surfaceCanvas.ClearTrail(); };
 
         _btnUpload.Text = "上传作业";
         _btnRun.Text = "执行点胶";
@@ -239,7 +311,7 @@ public sealed class MainForm : Form
         b.Buttons((_btnUpload, async (_, _) => await UploadJobAsync()),
                   (_btnRun, async (_, _) => await RunJobAsync()));
 
-        b.Section("③ 自动测试");
+        b.Section("④ 自动测试");
         _btnTest.Text = "一键测试：圆形 + 矩形 + 组合";
         _btnTest.Height = 34;
         StyleButton(_btnTest, Color.FromArgb(150, 100, 220));
@@ -328,7 +400,7 @@ public sealed class MainForm : Form
         var btnClearTrail = new Button { Text = "清除轨迹", Width = 108, Height = 28 };
         StyleButton(btnSave); StyleButton(btnClearTrail);
         btnSave.Click += (_, _) => SaveReport();
-        btnClearTrail.Click += (_, _) => _canvas.ClearTrail();
+        btnClearTrail.Click += (_, _) => { _canvas.ClearTrail(); _surfaceCanvas.ClearTrail(); };
         var btnRow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
         btnRow.Controls.Add(btnSave);
         btnRow.Controls.Add(btnClearTrail);
@@ -468,6 +540,43 @@ public sealed class MainForm : Form
         CornerSegments = (int)_numCornerSeg.Value,
     };
 
+    private void ImportDxf()
+    {
+        using var dlg = new OpenFileDialog { Filter = "DXF 图形 (*.dxf)|*.dxf|所有文件 (*.*)|*.*" };
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            int skipped = 0;
+            var paths = DxfImporter.Import(dlg.FileName, new DxfImportOptions
+            {
+                DefaultZ = (double)_numZ.Value,
+                OnSkipped = n => skipped = n,
+            });
+            int added = 0;
+            foreach (var path in paths.Where(p => p.Points.Count >= 2))
+            {
+                string name = $"DXF_{Path.GetFileNameWithoutExtension(dlg.FileName)}_{++added}[{path.Layer}]";
+                double feed = (double)_numFeed.Value;
+                double length = path.Points.Zip(path.Points.Skip(1), (a, b) => (b - a).Length).Sum();
+                _job.Add(new PlannedPattern
+                {
+                    Name = name, Kind = PatternKind.Imported,
+                    Spec = new PatternSpec { Kind = PatternKind.Imported, Name = name, Z = path.Points[0].Z, Feed = feed, Closed = path.IsClosed },
+                    Points = path.Points, Length = length, Feed = feed, Z = path.Points[0].Z, ValveOn = true,
+                    MinX = path.Points.Min(p => p.X), MaxX = path.Points.Max(p => p.X),
+                    MinY = path.Points.Min(p => p.Y), MaxY = path.Points.Max(p => p.Y),
+                    EstimatedSeconds = length / feed,
+                });
+            }
+            if (added == 0) throw new InvalidDataException("DXF 中没有可加工的路径实体");
+            RefreshJobList();
+            RefreshCanvasPatterns();
+            _viewTabs.SelectedIndex = 0;
+            AppendLog($"DXF 已加入作业: {added} 段, 默认Z={_numZ.Value:F1}mm, 跳过实体={skipped}");
+        }
+        catch (Exception ex) { AppendLog("DXF 导入失败: " + ex.Message); }
+    }
+
     private void PlanPreview()
     {
         try
@@ -477,6 +586,7 @@ public sealed class MainForm : Form
                                    $"{_preview.Length:F1} mm, 预计 {_preview.EstimatedSeconds:F1}s";
             _lblPreviewInfo.ForeColor = Ok;
             RefreshCanvasPatterns();
+            _viewTabs.SelectedIndex = 0;
             AppendLog($"生成图案: {_preview.Spec.Summary} → {_preview.PointCount} 点 / {_preview.Length:F1}mm");
             var warns = new PatternJob();
             warns.Add(_preview);
@@ -502,18 +612,28 @@ public sealed class MainForm : Form
 
     private void RemoveSelected()
     {
-        if (_lstJob.SelectedIndex < 0) return;
-        _job.RemoveAt(_lstJob.SelectedIndex);
+        int index = _lstJob.SelectedIndex;
+        if (index < 0) return;
+        if (index < _job.Patterns.Count) _job.RemoveAt(index);
+        else
+        {
+            int surfaceIndex = index - _job.Patterns.Count;
+            if (surfaceIndex < _surfaceItems.Count) _surfaceItems.RemoveAt(surfaceIndex);
+        }
         RefreshJobList();
         RefreshCanvasPatterns();
+        RefreshSurfaceScene();
     }
 
     private void ClearJob()
     {
         _job.Clear();
+        _surfaceItems.Clear();
         _preview = null;
+        _surfacePreview = [];
         RefreshJobList();
         RefreshCanvasPatterns();
+        RefreshSurfaceScene();
     }
 
     private void RefreshJobList()
@@ -524,8 +644,18 @@ public sealed class MainForm : Form
             var p = _job.Patterns[i];
             _lstJob.Items.Add($"{i + 1}. {p.Name}  {p.PointCount}点  {p.Length:F1}mm  {p.Feed:F0}mm/s");
         }
-        _lblJobInfo.Text = $"{_job.Patterns.Count} 段 / {_job.TotalPoints} 点 / {_job.TotalLength:F1} mm";
+        foreach (var item in _surfaceItems)
+        {
+            _lstJob.Items.Add($"{_lstJob.Items.Count + 1}. [曲面] {item.Name}  " +
+                              $"{item.Path.Points.Count}点  {SurfaceLength(item.Path):F1}mm  {item.Feed:F0}mm/s");
+        }
+        int totalPoints = _job.TotalPoints + _surfaceItems.Sum(i => i.Path.Points.Count);
+        double totalLength = _job.TotalLength + _surfaceItems.Sum(i => SurfaceLength(i.Path));
+        _lblJobInfo.Text = $"{_job.Patterns.Count + _surfaceItems.Count} 段 / {totalPoints} 点 / {totalLength:F1} mm";
     }
+
+    private static double SurfaceLength(SurfacePath path)
+        => path.Points.Zip(path.Points.Skip(1), (a, b) => (b - a).Length).Sum();
 
     private void RefreshCanvasPatterns()
     {
@@ -534,20 +664,207 @@ public sealed class MainForm : Form
         _canvas.SetPatterns(list);
     }
 
+    private void RefreshSurfaceScene()
+        => _surfaceCanvas.SetScene(_transformedMesh ?? _sourceMesh,
+            _surfaceItems.Select(i => i.Path).Concat(_surfacePreview));
+
+    // ------------------------------------------------------------------
+    // P7: STL 曲面作业与工程
+    // ------------------------------------------------------------------
+
+    private ModelTransform ReadTransform() => new()
+    {
+        Position = new Point3D((double)_numTx.Value, (double)_numTy.Value, (double)_numTz.Value),
+        RotationDeg = new Point3D((double)_numRx.Value, (double)_numRy.Value, (double)_numRz.Value),
+        Scale = (double)_numScale.Value,
+    };
+
+    private DispenseTiming ReadSurfaceTiming() => new(
+        (double)_numOpenDelay.Value, (double)_numEarlyClose.Value,
+        (double)_numCloseDelay.Value, (double)_numRetract.Value);
+
+    private SurfaceProjectSettings ReadSurfaceSettings() => new(
+        (double)_numZStart.Value, (double)_numZEnd.Value, (double)_numLayer.Value,
+        (double)_numOffset.Value, (double)_numSurfaceFeed.Value,
+        ReadSurfaceTiming(), ReadTransform());
+
+    private static void SetNum(NumericUpDown control, double value)
+        => control.Value = Math.Clamp((decimal)value, control.Minimum, control.Maximum);
+
+    private void ApplySurfaceSettings(SurfaceProjectSettings s)
+    {
+        SetNum(_numZStart, s.ZStart); SetNum(_numZEnd, s.ZEnd);
+        SetNum(_numLayer, s.LayerHeight); SetNum(_numOffset, s.NormalOffset);
+        SetNum(_numSurfaceFeed, s.Feed);
+        SetNum(_numOpenDelay, s.Timing.OpenDelayMs); SetNum(_numEarlyClose, s.Timing.EarlyCloseMs);
+        SetNum(_numCloseDelay, s.Timing.CloseDelayMs); SetNum(_numRetract, s.Timing.RetractMm);
+        SetNum(_numTx, s.Transform.Position.X); SetNum(_numTy, s.Transform.Position.Y);
+        SetNum(_numTz, s.Transform.Position.Z); SetNum(_numRx, s.Transform.RotationDeg.X);
+        SetNum(_numRy, s.Transform.RotationDeg.Y); SetNum(_numRz, s.Transform.RotationDeg.Z);
+        SetNum(_numScale, s.Transform.Scale);
+    }
+
+    private void ImportStl()
+    {
+        using var dlg = new OpenFileDialog { Filter = "STL 模型 (*.stl)|*.stl|所有文件 (*.*)|*.*" };
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            var mesh = StlImporter.Import(dlg.FileName);
+            if (mesh.Triangles.Count == 0) throw new InvalidDataException("STL 中没有三角面");
+            _sourceMesh = mesh;
+            _sourceStl = dlg.FileName;
+            _transformedMesh = null;
+            _surfacePreview = [];
+            _surfaceItems.Clear();
+
+            var bb = mesh.BoundingBox();
+            SetNum(_numZStart, bb.Min.Z);
+            SetNum(_numZEnd, bb.Max.Z);
+            SetNum(_numLayer, Math.Max(1, (bb.Max.Z - bb.Min.Z) / 10));
+            _lblStl.Text = $"{Path.GetFileName(dlg.FileName)}  {mesh.Triangles.Count} 三角面";
+            _lblSurfaceInfo.Text = $"Z [{bb.Min.Z:F2}, {bb.Max.Z:F2}]，请确认切片参数";
+            _lblSurfaceInfo.ForeColor = Accent;
+            RefreshJobList();
+            RefreshSurfaceScene();
+            _viewTabs.SelectedIndex = 1;
+            AppendLog($"STL 已导入: {dlg.FileName}, {mesh.Triangles.Count} 三角面");
+        }
+        catch (Exception ex)
+        {
+            _lblSurfaceInfo.Text = "STL 导入失败: " + ex.Message;
+            _lblSurfaceInfo.ForeColor = Err;
+            AppendLog(_lblSurfaceInfo.Text);
+        }
+    }
+
+    private void GenerateSurface()
+    {
+        if (_sourceMesh is null) { AppendLog("请先导入 STL 模型"); return; }
+        try
+        {
+            var s = ReadSurfaceSettings();
+            if (s.ZEnd < s.ZStart) throw new ArgumentException("切片 Z 终点不能小于起点");
+            _surfacePreview = [];
+            _transformedMesh = s.Transform.ApplyTo(_sourceMesh);
+            _surfacePreview = new PathGenerator().GenerateSurfacePaths(
+                _transformedMesh, s.ZStart, s.ZEnd, s.LayerHeight, s.NormalOffset);
+            if (_surfacePreview.Count == 0) throw new InvalidOperationException("指定 Z 范围没有生成有效路径");
+            int points = _surfacePreview.Sum(p => p.Points.Count);
+            double length = _surfacePreview.Sum(SurfaceLength);
+            _lblSurfaceInfo.Text = $"{_surfacePreview.Count} 段 / {points} 点 / {length:F1} mm（含逐点法向）";
+            _lblSurfaceInfo.ForeColor = Ok;
+            RefreshSurfaceScene();
+            _viewTabs.SelectedIndex = 1;
+            AppendLog($"曲面路径已生成: {_lblSurfaceInfo.Text}");
+        }
+        catch (Exception ex)
+        {
+            _lblSurfaceInfo.Text = "路径生成失败: " + ex.Message;
+            _lblSurfaceInfo.ForeColor = Err;
+            AppendLog(_lblSurfaceInfo.Text);
+        }
+    }
+
+    private void AddSurfaceToJob()
+    {
+        if (_surfacePreview.Count == 0) GenerateSurface();
+        if (_surfacePreview.Count == 0) return;
+        var timing = ReadSurfaceTiming();
+        double feed = (double)_numSurfaceFeed.Value;
+        foreach (var path in _surfacePreview)
+        {
+            string name = $"{Path.GetFileNameWithoutExtension(_sourceStl)}_{_surfaceItems.Count + 1}";
+            _surfaceItems.Add(new SurfaceJobItem(name, feed, timing, path));
+        }
+        int added = _surfacePreview.Count;
+        _surfacePreview = [];
+        RefreshJobList();
+        RefreshSurfaceScene();
+        AppendLog($"曲面路径已加入作业: {added} 段");
+    }
+
+    private void SaveSurfaceProject()
+    {
+        if (_sourceMesh is null && _surfaceItems.Count == 0) { AppendLog("没有可保存的曲面工程"); return; }
+        using var dlg = new SaveFileDialog
+        {
+            Filter = "点胶曲面工程 (*.dpsurf.json)|*.dpsurf.json",
+            FileName = $"{Path.GetFileNameWithoutExtension(_sourceStl)}.dpsurf.json",
+        };
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            var project = new SurfaceProject(1, _sourceStl, ReadSurfaceSettings(), new List<SurfaceJobItem>(_surfaceItems));
+            SurfaceProjectStore.Save(dlg.FileName, project);
+            AppendLog("曲面工程已保存: " + dlg.FileName);
+        }
+        catch (Exception ex) { AppendLog("曲面工程保存失败: " + ex.Message); }
+    }
+
+    private void LoadSurfaceProject()
+    {
+        using var dlg = new OpenFileDialog { Filter = "点胶曲面工程 (*.dpsurf.json)|*.dpsurf.json" };
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+        try
+        {
+            var project = SurfaceProjectStore.Load(dlg.FileName);
+            ApplySurfaceSettings(project.Settings);
+            _sourceStl = project.SourceStl;
+            _sourceMesh = File.Exists(_sourceStl) ? StlImporter.Import(_sourceStl) : null;
+            if (_sourceMesh is null && !string.IsNullOrWhiteSpace(_sourceStl))
+                AppendLog("⚠ 源 STL 不可用，已加载工程中保存的路径");
+            _transformedMesh = _sourceMesh is null ? null : project.Settings.Transform.ApplyTo(_sourceMesh);
+            _surfaceItems.Clear();
+            _surfaceItems.AddRange(project.Items);
+            _surfacePreview = [];
+            _lblStl.Text = _sourceMesh is null
+                ? "工程路径已加载（源 STL 不可用）"
+                : $"{Path.GetFileName(_sourceStl)}  {_sourceMesh.Triangles.Count} 三角面";
+            _lblSurfaceInfo.Text = $"工程已加载: {_surfaceItems.Count} 段曲面路径";
+            _lblSurfaceInfo.ForeColor = Ok;
+            RefreshJobList();
+            RefreshSurfaceScene();
+            _viewTabs.SelectedIndex = 1;
+            AppendLog("曲面工程已加载: " + dlg.FileName);
+        }
+        catch (Exception ex) { AppendLog("曲面工程加载失败: " + ex.Message); }
+    }
+
     private async Task UploadJobAsync()
     {
-        if (_job.Patterns.Count == 0) { AppendLog("作业为空，请先生成并加入图案"); return; }
+        if (_job.Patterns.Count == 0 && _surfaceItems.Count == 0)
+        {
+            AppendLog("作业为空，请先生成并加入图案或曲面路径");
+            return;
+        }
         var client = EnsureClient();
         if (!client.IsConnected) { AppendLog("未连接服务端"); return; }
+        if (_surfaceItems.Count > 0 && _state.Rtcp?.Enabled != true)
+        {
+            AppendLog("⚠ 曲面作业包含法向，请先开启 RTCP 再上传");
+            return;
+        }
+        if (_surfaceItems.Count > 0 && _state.Rtcp?.Calibrated != true)
+            AppendLog("⚠ RTCP 尚未标定，建议先标定再执行");
+
         var warns = _job.ValidateAgainst(_configs);
         foreach (var w in warns) AppendLog("⚠ " + w);
-        await client.UploadStepsAsync($"studio_{DateTime.Now:HHmmss}", _job.ToUploadSteps());
+        var steps = _job.ToUploadSteps();
+        foreach (var item in _surfaceItems)
+            steps.AddRange(JobAssembler.Assemble(new List<SurfacePath> { item.Path }, item.Feed, true, item.Timing));
+        await client.UploadStepsAsync($"studio_{DateTime.Now:HHmmss}", steps);
     }
 
     private async Task RunJobAsync()
     {
         var client = EnsureClient();
         if (!client.IsConnected) { AppendLog("未连接服务端"); return; }
+        if (_surfaceItems.Count > 0 && _state.Rtcp?.Enabled != true)
+        {
+            AppendLog("⚠ 曲面作业需要开启 RTCP，已阻止执行");
+            return;
+        }
         await client.RunJobAsync();
     }
 
@@ -576,6 +893,7 @@ public sealed class MainForm : Form
         _btnTest.Text = "测试进行中...";
         _txtReport.Text = "正在执行自动测试，请稍候...";
         _canvas.ClearTrail();
+        _surfaceCanvas.ClearTrail();
 
         var lines = new StringBuilder();
         try
@@ -669,6 +987,7 @@ public sealed class MainForm : Form
         _lblDevMode.ForeColor = st.Collision ? Err : Ok;
         if (!st.Collision && _lblAlarm.Text.Length > 0 && st.Mode == "Idle") _lblAlarm.Text = "";
         _canvas.SetCurrent(st.X.Pos, st.Y.Pos, st.Valve);
+        _surfaceCanvas.SetCurrent(st);
     }
 
     private static void SetAxis(Label pos, Label state, Label sen, AxisStateDto a)

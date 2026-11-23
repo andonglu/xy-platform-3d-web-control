@@ -3,7 +3,7 @@ using DispenseHost.Net;
 
 namespace DispenseHost.PatternPlan;
 
-public enum PatternKind { Circle, Rectangle }
+public enum PatternKind { Circle, Rectangle, Imported }
 
 /// <summary>
 /// 平面点胶图案参数。Z 为点胶工作高度，必须与服务端的 PenDownZ (8mm) 一致，
