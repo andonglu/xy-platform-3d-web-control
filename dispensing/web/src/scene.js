@@ -30,6 +30,10 @@ let sensorGroup = null, workspaceBox = null, labelsGroup = null;
 let trailPoints = [], trailLine = null;
 let previewLine = null, cadModel = null;
 let groundGrid = null;
+let productionRoot = null, fixtureRoot = null, workpieceRoot = null;
+let productionSourceGeometry = null, productionModelMeta = null;
+let productionConfigMsg = null, productionSnapshot = null;
+let clampMeshes = [];
 
 // 可复用的传感器标记引用: { x: {home, limPos, limNeg}, y: {...}, z: {...} }
 let sensorMarkers = {};
@@ -545,7 +549,7 @@ export function getKinematics() {
   };
 }
 
-/** STL 模型: 转成 Y-up, 居中并贴合台面 */
+/** 独立本地 STL 预览: 转成 Y-up, 居中并贴合台面；不参与生产坐标和路径。 */
 export function loadStlModel(file) {
   const reader = new FileReader();
   reader.onload = (e) => {
@@ -587,6 +591,213 @@ export function loadStlModel(file) {
 
 export function clearModel() {
   if (cadModel) { scene.remove(cadModel); disposeGeometries(cadModel); cadModel = null; }
+}
+
+// ---------------------------------------------------------------------------
+// P9 生产模型: STL 原始坐标只做单位换算，不做居中、归一化或贴台。
+// 机器坐标到 Three 使用固定的 (x,y,z) → (x,z,y)；旋转在机器坐标中按
+// Rx → Ry → Rz 组合，再转换到 Three，避免交换轴后改变旋转顺序。
+// ---------------------------------------------------------------------------
+const MACHINE_TO_THREE = new THREE.Matrix4().set(
+  1, 0, 0, 0,
+  0, 0, 1, 0,
+  0, 1, 0, 0,
+  0, 0, 0, 1,
+);
+const DEG = Math.PI / 180;
+
+function finite(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function poseToMachineMatrix(pose = {}) {
+  const rx = finite(pose.rx) * DEG;
+  const ry = finite(pose.ry) * DEG;
+  const rz = finite(pose.rz) * DEG;
+  const rotation = new THREE.Matrix4().makeRotationZ(rz)
+    .multiply(new THREE.Matrix4().makeRotationY(ry))
+    .multiply(new THREE.Matrix4().makeRotationX(rx));
+  return new THREE.Matrix4().makeTranslation(
+    finite(pose.x), finite(pose.y), finite(pose.z)).multiply(rotation);
+}
+
+function machineMatrixToThree(machineMatrix) {
+  // MACHINE_TO_THREE 是对换矩阵，其逆矩阵等于自身。
+  return MACHINE_TO_THREE.clone().multiply(machineMatrix).multiply(MACHINE_TO_THREE);
+}
+
+function applyMachineMatrix(group, machineMatrix) {
+  const matrix = machineMatrixToThree(machineMatrix);
+  matrix.decompose(group.position, group.quaternion, group.scale);
+  group.updateMatrix();
+}
+
+function ensureProductionRoot() {
+  if (productionRoot) return;
+  productionRoot = new THREE.Group();
+  productionRoot.name = 'ProductionScene';
+  scene.add(productionRoot);
+}
+
+function unitScale(unit) {
+  switch (String(unit || 'mm').toLowerCase()) {
+    case 'mm': return 1;
+    case 'cm': return 10;
+    case 'inch':
+    case 'in': return 25.4;
+    default: throw new Error(`不支持的模型单位: ${unit}`);
+  }
+}
+
+function reverseGeometryWinding(geometry) {
+  if (geometry.index) {
+    const index = geometry.index;
+    for (let i = 0; i < index.count; i += 3) {
+      const b = index.getX(i + 1);
+      index.setX(i + 1, index.getX(i + 2));
+      index.setX(i + 2, b);
+    }
+    index.needsUpdate = true;
+  } else {
+    for (const attribute of Object.values(geometry.attributes)) {
+      const { array, itemSize, count } = attribute;
+      for (let i = 0; i < count; i += 3) {
+        for (let k = 0; k < itemSize; k++) {
+          const bi = (i + 1) * itemSize + k;
+          const ci = (i + 2) * itemSize + k;
+          const b = array[bi];
+          array[bi] = array[ci];
+          array[ci] = b;
+        }
+      }
+      attribute.needsUpdate = true;
+    }
+  }
+  geometry.computeVertexNormals();
+}
+
+function configuredWorkpieceMatrix() {
+  const config = productionConfigMsg?.config || {};
+  const fixture = poseToMachineMatrix(config.fixture?.machinePose);
+  const relative = poseToMachineMatrix(config.placement?.relativePose);
+  return fixture.multiply(relative);
+}
+
+function updateClampVisual(clamped) {
+  for (const mesh of clampMeshes) {
+    mesh.material.color.setHex(clamped ? 0x38d17a : 0xd49a38);
+    mesh.material.emissive.setHex(clamped ? 0x06351c : 0x2c1800);
+  }
+}
+
+function rebuildFixture() {
+  ensureProductionRoot();
+  if (fixtureRoot) {
+    productionRoot.remove(fixtureRoot);
+    disposeGeometries(fixtureRoot);
+  }
+  fixtureRoot = new THREE.Group();
+  fixtureRoot.name = 'ProductionFixture';
+  productionRoot.add(fixtureRoot);
+  clampMeshes = [];
+
+  const plateMaterial = new THREE.MeshPhongMaterial({ color: 0x59687b, shininess: 70 });
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(120, 4, 100), plateMaterial);
+  plate.position.y = -2; // 定位板上表面与夹具机器原点 z=0 对齐
+  fixtureRoot.add(plate);
+  const pinMaterial = new THREE.MeshPhongMaterial({ color: 0xaab7c8, shininess: 100 });
+  for (const x of [-38, 38]) {
+    const pin = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 8, 12), pinMaterial.clone());
+    pin.position.set(x, 4, -32);
+    fixtureRoot.add(pin);
+  }
+  for (const x of [-53, 53]) {
+    const material = new THREE.MeshPhongMaterial({ color: 0xd49a38, emissive: 0x2c1800 });
+    const clamp = new THREE.Mesh(new THREE.BoxGeometry(10, 8, 36), material);
+    clamp.position.set(x, 4, 0);
+    fixtureRoot.add(clamp);
+    clampMeshes.push(clamp);
+  }
+  applyMachineMatrix(fixtureRoot,
+    poseToMachineMatrix(productionConfigMsg?.config?.fixture?.machinePose));
+  updateClampVisual(!!productionSnapshot?.clamped);
+}
+
+function rebuildProductionWorkpiece() {
+  ensureProductionRoot();
+  if (workpieceRoot) {
+    productionRoot.remove(workpieceRoot);
+    disposeGeometries(workpieceRoot);
+    workpieceRoot = null;
+  }
+  if (!productionSourceGeometry || !productionModelMeta) return;
+
+  const config = productionConfigMsg?.config || {};
+  const placementScale = finite(config.placement?.scale) || 1;
+  const geometry = productionSourceGeometry.clone();
+  const scale = unitScale(productionModelMeta.unit) * placementScale;
+  geometry.scale(scale, scale, scale); // 仅单位及工程缩放，不做尺寸归一化
+  if (config.placement?.flipNormals) reverseGeometryWinding(geometry);
+  geometry.applyMatrix4(MACHINE_TO_THREE);
+  geometry.computeBoundingSphere();
+
+  const material = new THREE.MeshPhongMaterial({
+    color: 0x4d8bff, flatShading: true, transparent: true, opacity: 0.82,
+    side: THREE.DoubleSide, shininess: 60,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'ProductionWorkpieceMesh';
+  workpieceRoot = new THREE.Group();
+  workpieceRoot.name = 'ProductionWorkpiece';
+  workpieceRoot.add(mesh);
+  productionRoot.add(workpieceRoot);
+
+  const pose = productionSnapshot?.workpiecePose;
+  applyMachineMatrix(workpieceRoot,
+    pose ? poseToMachineMatrix(pose) : configuredWorkpieceMatrix());
+  const matchesConfig = !productionConfigMsg?.modelId ||
+    productionConfigMsg.modelId === productionModelMeta.modelId;
+  workpieceRoot.visible = matchesConfig && productionSnapshot?.partPresent !== false;
+}
+
+/** 接收生产工程配置；Web 只展示，不编辑工艺。 */
+export function setProductionConfig(msg) {
+  productionConfigMsg = msg;
+  rebuildFixture();
+  rebuildProductionWorkpiece();
+}
+
+/** 从服务端重组完成的 ArrayBuffer 解析生产 STL。 */
+export function loadProductionModel(data, meta) {
+  if (!(data instanceof ArrayBuffer)) throw new Error('生产模型数据不是 ArrayBuffer');
+  const geometry = new STLLoader().parse(data);
+  if (!geometry.getAttribute('position') || geometry.getAttribute('position').count < 3) {
+    geometry.dispose();
+    throw new Error('生产 STL 不包含有效三角面');
+  }
+  unitScale(meta.unit); // 提前拒绝未知单位，保留旧模型不被替换
+  if (productionSourceGeometry) productionSourceGeometry.dispose();
+  productionSourceGeometry = geometry;
+  productionModelMeta = { modelId: meta.modelId, fileName: meta.fileName, unit: meta.unit };
+  productionSnapshot = null;
+  rebuildProductionWorkpiece();
+  return {
+    modelId: meta.modelId,
+    triangles: geometry.getAttribute('position').count / 3,
+  };
+}
+
+/** 服务端生产快照直接驱动工件；Web 不推进动作、不做暂停计时。 */
+export function updateProduction(snapshot) {
+  productionSnapshot = snapshot || null;
+  if (workpieceRoot) {
+    if (snapshot?.workpiecePose) {
+      applyMachineMatrix(workpieceRoot, poseToMachineMatrix(snapshot.workpiecePose));
+    }
+    workpieceRoot.visible = snapshot?.partPresent !== false;
+  }
+  updateClampVisual(!!snapshot?.clamped);
 }
 
 // ---------------------------------------------------------------------------

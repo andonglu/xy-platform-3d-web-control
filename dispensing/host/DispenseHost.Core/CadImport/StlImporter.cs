@@ -82,9 +82,11 @@ public sealed class Mesh
 public sealed class StlImporter
 {
     /// <summary>从文件导入 STL (自动检测 ASCII/Binary)</summary>
-    public static Mesh Import(string path)
+    public static Mesh Import(string path) => ImportBytes(File.ReadAllBytes(path));
+
+    /// <summary>P9: 从工程内嵌或服务端同步的原始字节导入 STL</summary>
+    public static Mesh ImportBytes(byte[] bytes)
     {
-        var bytes = File.ReadAllBytes(path);
         // ASCII STL 以 "solid" 开头 (但 binary 也可能以 solid 开头, 用大小判断)
         bool isAscii = bytes.Length < 512 && Encoding.ASCII.GetString(bytes).TrimStart().StartsWith("solid", StringComparison.OrdinalIgnoreCase);
         if (!isAscii && bytes.Length >= 84)

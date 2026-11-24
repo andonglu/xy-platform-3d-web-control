@@ -16,25 +16,26 @@ public sealed class ModelTransform
     /// <summary>缩放</summary>
     public double Scale { get; set; } = 1.0;
 
-    /// <summary>应用到点</summary>
+    /// <summary>应用到点: 缩放 → Rx/Ry/Rz → 平移</summary>
     public Point3D Apply(Point3D p)
     {
-        double sx = p.X * Scale;
-        double sy = p.Y * Scale;
-        double sz = p.Z * Scale;
+        var r = Rotate(new Point3D(p.X * Scale, p.Y * Scale, p.Z * Scale));
+        return new Point3D(r.X + Position.X, r.Y + Position.Y, r.Z + Position.Z);
+    }
 
+    /// <summary>P9: 法向只旋转并单位化, 不受平移和缩放影响</summary>
+    public Point3D ApplyNormal(Point3D normal) => Rotate(normal).Normalize();
+
+    private Point3D Rotate(Point3D p)
+    {
+        double sx = p.X, sy = p.Y, sz = p.Z;
         double rx = RotationDeg.X * Math.PI / 180;
         double ry = RotationDeg.Y * Math.PI / 180;
         double rz = RotationDeg.Z * Math.PI / 180;
-
-        // 绕 X 轴
         (sy, sz) = (sy * Math.Cos(rx) - sz * Math.Sin(rx), sy * Math.Sin(rx) + sz * Math.Cos(rx));
-        // 绕 Y 轴
         (sx, sz) = (sx * Math.Cos(ry) + sz * Math.Sin(ry), -sx * Math.Sin(ry) + sz * Math.Cos(ry));
-        // 绕 Z 轴
         (sx, sy) = (sx * Math.Cos(rz) - sy * Math.Sin(rz), sx * Math.Sin(rz) + sy * Math.Cos(rz));
-
-        return new Point3D(sx + Position.X, sy + Position.Y, sz + Position.Z);
+        return new Point3D(sx, sy, sz);
     }
 
     /// <summary>应用到整个网格</summary>
@@ -42,15 +43,38 @@ public sealed class ModelTransform
     {
         var result = new Mesh();
         foreach (var tri in mesh.Triangles)
-        {
-            result.Triangles.Add(new Triangle(
-                Apply(tri.Normal),
-                Apply(tri.V0),
-                Apply(tri.V1),
-                Apply(tri.V2)));
-        }
+            result.Triangles.Add(new Triangle(ApplyNormal(tri.Normal), Apply(tri.V0), Apply(tri.V1), Apply(tri.V2)));
         return result;
     }
+}
+
+/// <summary>P9: T_M_C = T_M_F × T_F_C; 网格、路径和预览共用同一组合顺序</summary>
+public static class WorkpieceTransform
+{
+    public static Point3D Apply(Point3D point, Pose3D fixture, Pose3D placement, double scale = 1)
+        => fixture.ToTransform().Apply(placement.ToTransform(scale).Apply(point));
+
+    public static Point3D ApplyNormal(Point3D normal, Pose3D fixture, Pose3D placement, bool flip = false)
+    {
+        var n = fixture.ToTransform().ApplyNormal(placement.ToTransform().ApplyNormal(normal));
+        return flip ? n * -1 : n;
+    }
+
+    public static Mesh Apply(Mesh mesh, Pose3D fixture, Pose3D placement, double scale = 1, bool flip = false)
+    {
+        var result = new Mesh();
+        foreach (var tri in mesh.Triangles)
+            result.Triangles.Add(new Triangle(
+                ApplyNormal(tri.Normal, fixture, placement, flip),
+                Apply(tri.V0, fixture, placement, scale),
+                Apply(tri.V1, fixture, placement, scale),
+                Apply(tri.V2, fixture, placement, scale)));
+        return result;
+    }
+
+    public static SurfacePath Apply(SurfacePath path, Pose3D fixture, Pose3D placement, double scale = 1, bool flip = false)
+        => new(path.Points.Select(p => Apply(p, fixture, placement, scale)).ToList(),
+            path.Normals.Select(n => ApplyNormal(n, fixture, placement, flip)).ToList());
 }
 
 /// <summary>P6: 曲面加工路径, 每个路径点携带同位置的单位法向</summary>
@@ -144,6 +168,119 @@ public sealed class PathGenerator
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// P9: 按人工区域来源生成机器坐标路径。传入网格必须已经完成工件/夹具变换，
+    /// 面区域取其三角面子集边界，Edges 串接选中的唯一边，Boundary 取整个网格边界，Slice 继续走原等高层算法。
+    /// </summary>
+    public List<SurfacePath> GenerateRegionPaths(Mesh mesh, RegionSource source, SurfaceProjectSettings settings)
+    {
+        if (mesh.Triangles.Count == 0) throw new InvalidDataException("区域模型为空");
+        if (source is null) throw new ArgumentNullException(nameof(source));
+        if (settings.LayerHeight <= 0 || settings.Feed <= 0 || settings.PointSpacing < 0
+            || settings.NormalSmoothPasses < 0 || settings.NormalSmoothStrength is < 0 or > 1
+            || settings.MaxPoseStepDeg is < 1 or > 30 || settings.ZEnd < settings.ZStart)
+            throw new InvalidDataException("区域切片、进给、布点或法向参数无效");
+
+        if (source.Kind.Equals("Slice", StringComparison.OrdinalIgnoreCase))
+            return GenerateSurfacePaths(mesh, settings.ZStart, settings.ZEnd, settings.LayerHeight,
+                settings.NormalOffset, settings.PointSpacing, settings.NormalSmoothPasses,
+                settings.NormalSmoothStrength);
+
+        List<List<Point3D>> chains;
+        Mesh normalMesh;
+        if (source.Kind.Equals("Edges", StringComparison.OrdinalIgnoreCase))
+        {
+            var uniqueEdges = GetUniqueEdges(mesh);
+            if (source.Indices.Length == 0 || source.Indices.Any(i => i < 0 || i >= uniqueEdges.Count))
+                throw new InvalidDataException("Edges 区域为空或包含超出模型范围的唯一边索引");
+            var selectedEdges = source.Indices.Distinct().Select(i => uniqueEdges[i]).ToList();
+            // 任意唯一边（包括内部边）都复用现有边串接算法，法向来自完整原始网格。
+            chains = ChainEdges(selectedEdges);
+            normalMesh = mesh;
+        }
+        else
+        {
+            Mesh selected;
+            if (source.Kind.Equals("Boundary", StringComparison.OrdinalIgnoreCase))
+            {
+                if (source.Indices.Length != 0) throw new InvalidDataException("Boundary 区域不应包含边索引");
+                selected = mesh;
+            }
+            else if (source.Kind.Equals("Faces", StringComparison.OrdinalIgnoreCase))
+            {
+                if (source.Indices.Length == 0) throw new InvalidDataException("Faces 区域至少需要一个三角面");
+                if (source.Indices.Any(i => i < 0 || i >= mesh.Triangles.Count))
+                    throw new InvalidDataException("Faces 区域包含超出模型范围的三角面索引");
+                selected = new Mesh();
+                foreach (int index in source.Indices.Distinct()) selected.Triangles.Add(mesh.Triangles[index]);
+            }
+            else throw new InvalidDataException($"不支持的区域来源: {source.Kind}");
+
+            // 边界串接完全复用 P6 实现，随后为边界顶点恢复来源面的平均单位法向。
+            chains = GenerateBoundaryPaths(selected, zOffset: 0, simplifyTol: 0.1);
+            normalMesh = selected;
+        }
+
+        var vertexNormals = BuildVertexNormals(normalMesh);
+        var result = new List<SurfacePath>();
+        foreach (var chain in chains)
+        {
+            var points = new List<Point3D>(chain.Count);
+            var normals = new List<Point3D>(chain.Count);
+            foreach (var point in chain)
+            {
+                if (!vertexNormals.TryGetValue(VertexKey(point), out var normal) || normal.Length < 1e-9)
+                    throw new InvalidDataException("区域边界存在零法向，无法生成五轴路径");
+                normal = normal.Normalize();
+                normals.Add(normal);
+                points.Add(point + normal * settings.NormalOffset);
+            }
+            if (points.Count < 2) continue;
+            var path = new SurfacePath(points, normals);
+            if (settings.PointSpacing > 0) path = ResampleSurfacePath(path, settings.PointSpacing);
+            if (settings.NormalSmoothPasses > 0 && settings.NormalSmoothStrength > 0)
+                path = SmoothSurfaceNormals(path, settings.NormalSmoothPasses, settings.NormalSmoothStrength);
+            result.Add(path);
+        }
+        if (result.Count == 0) throw new InvalidDataException("选中区域没有可用边或边界（闭合实体请选择 Faces 子集或 Slice）");
+        return result;
+    }
+
+    private static Dictionary<string, Point3D> BuildVertexNormals(Mesh mesh)
+    {
+        var sums = new Dictionary<string, Point3D>();
+        foreach (var tri in mesh.Triangles)
+        {
+            var normal = Point3D.Cross(tri.V1 - tri.V0, tri.V2 - tri.V0).Normalize();
+            if (normal.Length < 1e-9) normal = tri.Normal.Normalize();
+            foreach (var vertex in new[] { tri.V0, tri.V1, tri.V2 })
+            {
+                string key = VertexKey(vertex);
+                sums[key] = sums.TryGetValue(key, out var sum) ? sum + normal : normal;
+            }
+        }
+        return sums;
+    }
+
+    private static string VertexKey(Point3D p) => $"{p.X:F4},{p.Y:F4},{p.Z:F4}";
+
+    /// <summary>
+    /// 按三角面遍历顺序建立稳定唯一边表；正反方向共享同一条边，索引供 RegionSource.Edges 和画布拾取共用。
+    /// </summary>
+    public static List<(Point3D A, Point3D B)> GetUniqueEdges(Mesh mesh)
+    {
+        var edges = new Dictionary<string, (Point3D A, Point3D B)>();
+        foreach (var tri in mesh.Triangles)
+            foreach (var (a, b) in new[] { (tri.V0, tri.V1), (tri.V1, tri.V2), (tri.V2, tri.V0) })
+            {
+                if (Dist(a, b) < 1e-9) continue;
+                string ka = VertexKey(a), kb = VertexKey(b);
+                string key = string.CompareOrdinal(ka, kb) <= 0 ? ka + "|" + kb : kb + "|" + ka;
+                edges.TryAdd(key, (a, b));
+            }
+        return edges.Values.ToList();
     }
 
     /// <summary>P8: 按弧长等距重采样, 保留首尾点; 相邻法向同步线性插值后归一化</summary>

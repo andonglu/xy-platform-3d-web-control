@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 using DispenseHost.Net;
+using DispenseHost.PathPlan;
 using DispenseHost.Testing;
 using DispenseStudio;
 
@@ -34,6 +35,12 @@ internal static class Program
             try
             {
                 Application.EnableVisualStyles();
+                using (var production = new ProductionConfigForm(null, ProductionConfig.CreateDefault(),
+                           new SurfaceProjectSettings(0, 20, 1, 0, 60, new DispenseTiming(), new ModelTransform()),
+                           Array.Empty<SurfaceJobItem>()))
+                {
+                    production.CreateControl(); // 仅构造五页人工表单，不进入生产、不建立网络连接
+                }
                 using var form = new MainForm(autoConnect: false);
                 Console.WriteLine($"SMOKE OK: {form.Text}, 控件 {form.Controls.Count} 个顶层容器");
                 return 0;

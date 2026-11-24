@@ -37,6 +37,16 @@ public sealed class MainForm : Form
     private List<SurfacePath> _surfacePreview = [];
     private readonly List<SurfaceJobItem> _surfaceItems = [];
 
+    // P9: 原始模型、人工生产配置与服务端同步修订号
+    private ModelAsset? _model;
+    private ProductionConfig? _production;
+    private long _productionRevision = 1;
+    private string _syncedModelKey = "";
+    private long _syncedProductionRevision = -1;
+    private ProductionConfigForm? _productionForm;
+    private bool _productionBusy;
+    private readonly Label _lblProductionStatus = new();
+
     // 顶部
     private readonly TextBox _txtUrl = new();
     private readonly Button _btnConnect = new();
@@ -289,6 +299,14 @@ public sealed class MainForm : Form
         var btnSurfaceAdd = new Button { Text = "加入作业" };
         StyleButton(btnSurfacePlan, Accent);
         b.Buttons((btnSurfacePlan, (_, _) => GenerateSurface()), (btnSurfaceAdd, (_, _) => AddSurfaceToJob()));
+        var btnPickFace = new Button { Text = "面拾取 / 旋转" };
+        var btnClearFaces = new Button { Text = "清除选中面" };
+        b.Buttons((btnPickFace, (_, _) =>
+        {
+            bool picking = _surfaceCanvas.PickMode != SurfacePickMode.Face;
+            _surfaceCanvas.SetPickMode(picking ? SurfacePickMode.Face : SurfacePickMode.Rotate);
+            AppendLog(picking ? "面拾取已启用：单击选择，Ctrl+单击追加" : "已恢复拖动旋转");
+        }), (btnClearFaces, (_, _) => _surfaceCanvas.ClearFaceSelection()));
         _lblSurfaceInfo.Text = "导入 STL 后生成等高层带法向路径";
         _lblSurfaceInfo.ForeColor = Color.FromArgb(150, 165, 185);
         b.Line(_lblSurfaceInfo);
@@ -298,7 +316,41 @@ public sealed class MainForm : Form
         b.Buttons((btnSaveProject, (_, _) => SaveSurfaceProject()),
                   (btnLoadProject, (_, _) => LoadSurfaceProject()));
 
-        b.Section("③ 点胶作业");
+        b.Section("③ P9 CAD 生产仿真");
+        var btnProductionConfig = new Button { Text = "生产配置（五页人工设置）..." };
+        StyleButton(btnProductionConfig, Accent);
+        b.Full(btnProductionConfig);
+        btnProductionConfig.Click += (_, _) => OpenProductionConfig();
+        var btnProductionSync = new Button { Text = "同步模型与配置" };
+        var btnProductionStart = new Button { Text = "开始生产" };
+        StyleButton(btnProductionSync, Accent); StyleButton(btnProductionStart, Ok);
+        b.Buttons((btnProductionSync, async (_, _) => await RunProductionUi(SyncProductionAsync)),
+                  (btnProductionStart, async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_start", null))));
+        var btnPause = new Button { Text = "暂停" };
+        var btnResume = new Button { Text = "继续" };
+        var btnStep = new Button { Text = "单步" };
+        b.Triple(btnPause, btnResume, btnStep);
+        btnPause.Click += async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_pause", null));
+        btnResume.Click += async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_resume", null));
+        btnStep.Click += async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_step", null));
+        var btnStop = new Button { Text = "停止" };
+        var btnRetry = new Button { Text = "重试" };
+        var btnProductionReset = new Button { Text = "生产复位" };
+        StyleButton(btnStop, Warn);
+        b.Triple(btnStop, btnRetry, btnProductionReset);
+        btnStop.Click += async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_stop", null));
+        btnRetry.Click += async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_retry", null));
+        btnProductionReset.Click += async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_reset", null));
+        var btnPart = new Button { Text = "到位确认" };
+        var btnClamp = new Button { Text = "夹紧确认" };
+        b.Buttons((btnPart, async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_confirm", "PART_PRESENT"))),
+                  (btnClamp, async (_, _) => await RunProductionUi(() => ExecuteProductionCommandAsync("production_confirm", "CLAMP_OK"))));
+        _lblProductionStatus.Text = "生产配置草稿（模拟运行）";
+        _lblProductionStatus.Height = 38;
+        _lblProductionStatus.ForeColor = Warn;
+        b.Full(_lblProductionStatus);
+
+        b.Section("④ 点胶作业");
         _lstJob.Height = 104;
         b.Full(_lstJob);
         _lblJobInfo.Text = "0 段 / 0 点 / 0.0 mm";
@@ -476,10 +528,22 @@ public sealed class MainForm : Form
                 _lblConn.Text = connected ? "● 已连接" : "● 未连接";
                 _lblConn.ForeColor = connected ? Ok : Err;
                 _btnConnect.Text = connected ? "断开" : "连接";
-                if (!connected) _lblMode.Text = "模式: Offline";
+                if (!connected)
+                {
+                    _lblMode.Text = "模式: Offline";
+                    _syncedModelKey = "";
+                    _syncedProductionRevision = -1;
+                }
             });
         };
         _client.OnState += st => _state = st;
+        _client.OnProduction += snapshot => Ui(() =>
+        {
+            _lblProductionStatus.Text = $"模拟生产: {snapshot.Phase}  {snapshot.CompletedCount}/{snapshot.BatchCount}  " +
+                                        $"{snapshot.Progress:P0}{(snapshot.Error is null ? "" : "  " + snapshot.Error)}";
+            _lblProductionStatus.ForeColor = snapshot.Error is null ? Ok : Err;
+            if (_productionForm is { IsDisposed: false }) _productionForm.UpdateSnapshot(snapshot);
+        });
         _client.OnConfigData += cfg =>
         {
             _configs = cfg;
@@ -652,7 +716,10 @@ public sealed class MainForm : Form
         }
         foreach (var item in _surfaceItems)
         {
-            _lstJob.Items.Add($"{_lstJob.Items.Count + 1}. [曲面] {item.Name}  " +
+            bool stale = _model is not null && _production is not null &&
+                (item.Source is null || item.Settings is null ||
+                 item.Fingerprint != ProductionFingerprint.Compute(_model, _production, item.Source, item.Settings));
+            _lstJob.Items.Add($"{_lstJob.Items.Count + 1}. [曲面{(stale ? "/需重生成" : "")}] {item.Name}  " +
                               $"{item.Path.Points.Count}点  {SurfaceLength(item.Path):F1}mm  {item.Feed:F0}mm/s");
         }
         int totalPoints = _job.TotalPoints + _surfaceItems.Sum(i => i.Path.Points.Count);
@@ -671,8 +738,14 @@ public sealed class MainForm : Form
     }
 
     private void RefreshSurfaceScene()
-        => _surfaceCanvas.SetScene(_transformedMesh ?? _sourceMesh,
-            _surfaceItems.Select(i => i.Path).Concat(_surfacePreview));
+    {
+        var regionFaces = _surfaceItems
+            .Where(i => i.Source?.Kind.Equals("Faces", StringComparison.OrdinalIgnoreCase) == true)
+            .SelectMany(i => i.Source!.Indices);
+        _surfaceCanvas.SetScene(_transformedMesh ?? _sourceMesh,
+            _surfaceItems.Select(i => i.Path).Concat(_surfacePreview),
+            _production?.Fixture, regionFaces);
+    }
 
     // ------------------------------------------------------------------
     // P7: STL 曲面作业与工程
@@ -720,10 +793,16 @@ public sealed class MainForm : Form
         if (dlg.ShowDialog() != DialogResult.OK) return;
         try
         {
-            var mesh = StlImporter.Import(dlg.FileName);
+            _model = ModelAsset.FromFile(dlg.FileName);
+            var mesh = ReadModelMesh(_model);
             if (mesh.Triangles.Count == 0) throw new InvalidDataException("STL 中没有三角面");
             _sourceMesh = mesh;
             _sourceStl = dlg.FileName;
+            _production = ProductionConfig.CreateDefault() with { Name = Path.GetFileNameWithoutExtension(dlg.FileName) };
+            _productionRevision = 1;
+            _syncedModelKey = "";
+            _syncedProductionRevision = -1;
+            ApplyPlacementToControls(_production.Placement);
             _transformedMesh = null;
             _surfacePreview = [];
             _surfaceItems.Clear();
@@ -748,15 +827,134 @@ public sealed class MainForm : Form
         }
     }
 
+    private static Mesh ReadModelMesh(ModelAsset model)
+    {
+        var mesh = StlImporter.ImportBytes(model.GetBytes());
+        double scale = model.UnitToMm;
+        return Math.Abs(scale - 1) < 1e-12 ? mesh : new ModelTransform { Scale = scale }.ApplyTo(mesh);
+    }
+
+    private void ApplyPlacementToControls(PlacementConfig placement)
+    {
+        SetNum(_numTx, placement.Pose.X); SetNum(_numTy, placement.Pose.Y); SetNum(_numTz, placement.Pose.Z);
+        SetNum(_numRx, placement.Pose.Rx); SetNum(_numRy, placement.Pose.Ry); SetNum(_numRz, placement.Pose.Rz);
+        SetNum(_numScale, placement.Scale);
+    }
+
+    private void UpdateProductionPlacementFromControls()
+    {
+        if (_production is null) return;
+        var t = ReadTransform();
+        var placement = new PlacementConfig(new Pose3D(t.Position.X, t.Position.Y, t.Position.Z,
+            t.RotationDeg.X, t.RotationDeg.Y, t.RotationDeg.Z), t.Scale, _production.Placement.FlipNormals);
+        var updated = _production with { Placement = placement };
+        if (updated != _production)
+        {
+            _production = updated;
+            _productionRevision++;
+            _lblProductionStatus.Text = "工件放置已改变，旧路径需重新生成";
+        }
+    }
+
+    private Mesh BuildMachineMesh(SurfaceProjectSettings settings)
+    {
+        if (_sourceMesh is null) throw new InvalidOperationException("模型尚未加载");
+        if (_production is null) return settings.Transform.ApplyTo(_sourceMesh);
+        // 配置表单数值同时映射到 P7 控件，因此这里只采用一份放置来源，避免重复变换。
+        return WorkpieceTransform.Apply(_sourceMesh, _production.Fixture.Pose,
+            _production.Placement.Pose, _production.Placement.Scale, _production.Placement.FlipNormals);
+    }
+
+    private void OpenProductionConfig()
+    {
+        UpdateProductionPlacementFromControls();
+        if (_productionForm is { IsDisposed: false }) { _productionForm.Activate(); return; }
+        var production = _production ?? ProductionConfig.CreateDefault();
+        ProductionConfigForm? form = null;
+        form = new ProductionConfigForm(_model, production, ReadSurfaceSettings(), _surfaceItems,
+            syncAsync: async () =>
+            {
+                ApplyProductionConfigForm(form!);
+                await SyncProductionAsync();
+            },
+            commandAsync: async (command, signal) =>
+            {
+                ApplyProductionConfigForm(form!);
+                await ExecuteProductionCommandAsync(command, signal);
+            },
+            generateRegion: request =>
+            {
+                ApplyProductionConfigForm(form!);
+                return GenerateConfiguredRegion(request);
+            },
+            selectedFaces: () => _surfaceCanvas.SelectedFaces);
+        _productionForm = form;
+        using (form)
+        {
+            if (form.ShowDialog(this) == DialogResult.OK) ApplyProductionConfigForm(form);
+        }
+        _productionForm = null;
+    }
+
+    private void ApplyProductionConfigForm(ProductionConfigForm form)
+    {
+        if (form.ResultModel is null || form.ResultConfig is null) return;
+        bool modelChanged = _model != form.ResultModel;
+        bool configChanged = _production != form.ResultConfig;
+        if (!modelChanged && !configChanged) return;
+        _model = form.ResultModel;
+        _production = form.ResultConfig;
+        _productionRevision++;
+        if (modelChanged)
+        {
+            _sourceMesh = ReadModelMesh(_model);
+            _sourceStl = _model.FileName;
+            _transformedMesh = null;
+        }
+        ApplyPlacementToControls(_production.Placement);
+        if (_sourceMesh is not null) _transformedMesh = BuildMachineMesh(ReadSurfaceSettings());
+        _lblProductionStatus.Text = "配置已应用（模拟运行）；带旧指纹的路径禁止上传";
+        _lblProductionStatus.ForeColor = Warn;
+        RefreshJobList();
+        RefreshSurfaceScene();
+    }
+
+    private string GenerateConfiguredRegion(RegionGenerationRequest request)
+    {
+        if (_sourceMesh is null || _model is null || _production is null)
+            throw new InvalidDataException("请先在模型页关联有效 STL");
+        if (_surfaceItems.Any(i => i.Name.Equals(request.Name, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("区域名称已存在");
+        var settings = request.Settings with { Transform = new ModelTransform() };
+        _transformedMesh = BuildMachineMesh(settings);
+        var paths = new PathGenerator().GenerateRegionPaths(_transformedMesh, request.Source, settings);
+        string fingerprint = ProductionFingerprint.Compute(_model, _production, request.Source, settings);
+        foreach (var path in paths)
+        {
+            string name = paths.Count == 1 ? request.Name : $"{request.Name}_{_surfaceItems.Count + 1}";
+            _surfaceItems.Add(new SurfaceJobItem(name, settings.Feed, settings.Timing, path,
+                request.Source, settings, fingerprint));
+        }
+        _productionRevision++;
+        _surfacePreview = [];
+        RefreshJobList();
+        RefreshSurfaceScene();
+        _viewTabs.SelectedIndex = 1;
+        AppendLog($"P9 区域已生成: {request.Name}, {paths.Count} 段, 来源 {request.Source.Kind}");
+        return $"已生成 {paths.Count} 段机器坐标路径并记录指纹；可继续配置其他区域。";
+    }
+
     private void GenerateSurface()
     {
         if (_sourceMesh is null) { AppendLog("请先导入 STL 模型"); return; }
         try
         {
+            UpdateProductionPlacementFromControls();
             var s = ReadSurfaceSettings();
+            if (_production is not null) s = s with { Transform = new ModelTransform() };
             if (s.ZEnd < s.ZStart) throw new ArgumentException("切片 Z 终点不能小于起点");
             _surfacePreview = [];
-            _transformedMesh = s.Transform.ApplyTo(_sourceMesh);
+            _transformedMesh = BuildMachineMesh(s);
             _surfacePreview = new PathGenerator().GenerateSurfacePaths(
                 _transformedMesh, s.ZStart, s.ZEnd, s.LayerHeight, s.NormalOffset,
                 s.PointSpacing, s.NormalSmoothPasses, s.NormalSmoothStrength);
@@ -779,24 +977,34 @@ public sealed class MainForm : Form
 
     private void AddSurfaceToJob()
     {
-        if (_surfacePreview.Count == 0) GenerateSurface();
+        // P9 加入时重新生成，确保不会把配置修改前的预览写入工程。
+        if (_production is not null || _surfacePreview.Count == 0) GenerateSurface();
         if (_surfacePreview.Count == 0) return;
-        var timing = ReadSurfaceTiming();
-        double feed = (double)_numSurfaceFeed.Value;
+        var settings = ReadSurfaceSettings();
+        if (_production is not null) settings = settings with { Transform = new ModelTransform() };
+        var timing = settings.Timing;
+        double feed = settings.Feed;
+        var source = RegionSource.Slice();
+        string? fingerprint = _model is not null && _production is not null
+            ? ProductionFingerprint.Compute(_model, _production, source, settings) : null;
         foreach (var path in _surfacePreview)
         {
             string name = $"{Path.GetFileNameWithoutExtension(_sourceStl)}_{_surfaceItems.Count + 1}";
-            _surfaceItems.Add(new SurfaceJobItem(name, feed, timing, path));
+            _surfaceItems.Add(fingerprint is null
+                ? new SurfaceJobItem(name, feed, timing, path)
+                : new SurfaceJobItem(name, feed, timing, path, source, settings, fingerprint));
         }
         int added = _surfacePreview.Count;
+        if (_production is not null) _productionRevision++;
         _surfacePreview = [];
         RefreshJobList();
         RefreshSurfaceScene();
-        AppendLog($"曲面路径已加入作业: {added} 段");
+        AppendLog($"曲面路径已加入作业: {added} 段，已记录几何来源与指纹");
     }
 
     private void SaveSurfaceProject()
     {
+        UpdateProductionPlacementFromControls();
         if (_sourceMesh is null && _surfaceItems.Count == 0) { AppendLog("没有可保存的曲面工程"); return; }
         using var dlg = new SaveFileDialog
         {
@@ -806,7 +1014,8 @@ public sealed class MainForm : Form
         if (dlg.ShowDialog() != DialogResult.OK) return;
         try
         {
-            var project = new SurfaceProject(1, _sourceStl, ReadSurfaceSettings(), new List<SurfaceJobItem>(_surfaceItems));
+            var project = new SurfaceProject(2, _sourceStl, ReadSurfaceSettings(),
+                new List<SurfaceJobItem>(_surfaceItems), _model, _production);
             SurfaceProjectStore.Save(dlg.FileName, project);
             AppendLog("曲面工程已保存: " + dlg.FileName);
         }
@@ -821,11 +1030,23 @@ public sealed class MainForm : Form
         {
             var project = SurfaceProjectStore.Load(dlg.FileName);
             ApplySurfaceSettings(project.Settings);
+            _model = project.Model;
+            _production = project.Production;
+            _productionRevision = 1;
+            _syncedModelKey = "";
+            _syncedProductionRevision = -1;
             _sourceStl = project.SourceStl;
-            _sourceMesh = File.Exists(_sourceStl) ? StlImporter.Import(_sourceStl) : null;
+            if (_model is not null)
+            {
+                // 内嵌原始模型优先于外部路径，确保换机后工程仍可恢复。
+                _sourceMesh = ReadModelMesh(_model);
+                if (string.IsNullOrWhiteSpace(_sourceStl)) _sourceStl = _model.FileName;
+            }
+            else _sourceMesh = File.Exists(_sourceStl) ? StlImporter.Import(_sourceStl) : null;
+            if (_production is not null) ApplyPlacementToControls(_production.Placement);
             if (_sourceMesh is null && !string.IsNullOrWhiteSpace(_sourceStl))
                 AppendLog("⚠ 源 STL 不可用，已加载工程中保存的路径");
-            _transformedMesh = _sourceMesh is null ? null : project.Settings.Transform.ApplyTo(_sourceMesh);
+            _transformedMesh = _sourceMesh is null ? null : BuildMachineMesh(project.Settings);
             _surfaceItems.Clear();
             _surfaceItems.AddRange(project.Items);
             _surfacePreview = [];
@@ -859,6 +1080,100 @@ public sealed class MainForm : Form
         return true;
     }
 
+    private void EnsureSurfaceItemsCurrent()
+    {
+        UpdateProductionPlacementFromControls();
+        if (_production is null) return;
+        if (_model is null) throw new InvalidDataException("生产配置缺少内嵌模型，已阻止上传/执行");
+        var stale = _surfaceItems.Where(i => i.Source is null || i.Settings is null ||
+            i.Fingerprint != ProductionFingerprint.Compute(_model, _production, i.Source, i.Settings))
+            .Select(i => i.Name).Distinct().ToArray();
+        if (stale.Length > 0)
+            throw new InvalidDataException("以下路径的配置指纹已失效，请重新生成: " + string.Join("、", stale));
+    }
+
+    private List<DispenseClient.UploadStep> BuildProductionSteps()
+    {
+        var steps = _job.ToUploadSteps();
+        foreach (var item in _surfaceItems)
+            steps.AddRange(JobAssembler.Assemble(new List<SurfacePath> { item.Path }, item.Feed, true, item.Timing));
+        if (steps.Count == 0) throw new InvalidDataException("生产作业为空，请至少添加一个曲面区域");
+        return steps;
+    }
+
+    private async Task SyncProductionAsync()
+    {
+        UpdateProductionPlacementFromControls();
+        if (_model is null || _production is null || _sourceMesh is null)
+            throw new InvalidDataException("请先导入 STL 并完成生产配置");
+        if (_surfaceItems.Count == 0) throw new InvalidDataException("完整生产至少需要一个有效点胶区域");
+        EnsureSurfaceItemsCurrent();
+        var client = EnsureClient();
+        if (!client.IsConnected) throw new InvalidOperationException("未连接服务端，不能同步生产配置");
+        if (_state.Rtcp?.Enabled != true || _state.Rtcp.Calibrated != true)
+            throw new InvalidOperationException("同步/生产前必须开启并完成 RTCP 标定");
+        if (!ValidateSurfaceSafety()) throw new InvalidOperationException("路径安全预检查未通过");
+        var steps = BuildProductionSteps();
+        string modelKey = _model.Id + ":" + _model.Unit + ":" + _model.Sha256;
+        if (!modelKey.Equals(_syncedModelKey, StringComparison.Ordinal))
+        {
+            _lblProductionStatus.Text = "正在同步原始模型并等待 ACK...";
+            await client.UploadModelAsync(_model);
+            _syncedModelKey = modelKey;
+        }
+        if (_syncedProductionRevision != _productionRevision)
+        {
+            _lblProductionStatus.Text = "正在同步生产配置并等待 ACK...";
+            await client.UploadProductionConfigAsync(_production.ProjectId, _productionRevision,
+                _model.Id, _production, steps);
+            _syncedProductionRevision = _productionRevision;
+        }
+        _lblProductionStatus.Text = $"模型与配置同步成功（修订 {_productionRevision}），可模拟生产";
+        _lblProductionStatus.ForeColor = Ok;
+        _productionForm?.SetFeedback(_lblProductionStatus.Text);
+    }
+
+    private async Task ExecuteProductionCommandAsync(string command, string? signal)
+    {
+        var client = EnsureClient();
+        if (!client.IsConnected) throw new InvalidOperationException("未连接服务端");
+        if (command is "production_start" or "production_step" && _syncedProductionRevision != _productionRevision)
+            await SyncProductionAsync();
+        if (_syncedProductionRevision < 0)
+            throw new InvalidOperationException("请先同步模型与生产配置");
+        long revision = _syncedProductionRevision;
+        string projectId = _production?.ProjectId ?? throw new InvalidDataException("生产配置为空");
+        switch (command)
+        {
+            case "production_start": await client.ProductionStartAsync(projectId, revision); break;
+            case "production_pause": await client.ProductionPauseAsync(projectId, revision); break;
+            case "production_resume": await client.ProductionResumeAsync(projectId, revision); break;
+            case "production_stop": await client.ProductionStopAsync(projectId, revision); break;
+            case "production_reset": await client.ProductionResetAsync(projectId, revision); break;
+            case "production_retry": await client.ProductionRetryAsync(projectId, revision); break;
+            case "production_step": await client.ProductionStepAsync(projectId, revision); break;
+            case "production_confirm": await client.ProductionConfirmAsync(projectId, revision, signal ?? ""); break;
+            default: throw new ArgumentException("未知生产命令: " + command);
+        }
+        _lblProductionStatus.Text = $"{command} 已收到成功 ACK，等待服务端快照";
+        _lblProductionStatus.ForeColor = Accent;
+    }
+
+    private async Task RunProductionUi(Func<Task> action)
+    {
+        if (_productionBusy) return;
+        _productionBusy = true;
+        try { await action(); }
+        catch (Exception ex)
+        {
+            _lblProductionStatus.Text = ex.Message;
+            _lblProductionStatus.ForeColor = Err;
+            _productionForm?.SetFeedback(ex.Message, true);
+            AppendLog("⚠ P9 生产: " + ex.Message);
+        }
+        finally { _productionBusy = false; }
+    }
+
     private async Task UploadJobAsync()
     {
         if (_job.Patterns.Count == 0 && _surfaceItems.Count == 0)
@@ -868,6 +1183,8 @@ public sealed class MainForm : Form
         }
         var client = EnsureClient();
         if (!client.IsConnected) { AppendLog("未连接服务端"); return; }
+        try { EnsureSurfaceItemsCurrent(); }
+        catch (Exception ex) { AppendLog("⚠ " + ex.Message); return; }
         if (_surfaceItems.Count > 0 && _state.Rtcp?.Enabled != true)
         {
             AppendLog("⚠ 曲面作业包含法向，请先开启 RTCP 再上传");
@@ -889,6 +1206,8 @@ public sealed class MainForm : Form
     {
         var client = EnsureClient();
         if (!client.IsConnected) { AppendLog("未连接服务端"); return; }
+        try { EnsureSurfaceItemsCurrent(); }
+        catch (Exception ex) { AppendLog("⚠ " + ex.Message); return; }
         if (_surfaceItems.Count > 0 && _state.Rtcp?.Enabled != true)
         {
             AppendLog("⚠ 曲面作业需要开启 RTCP，已阻止执行");

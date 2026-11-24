@@ -5,6 +5,9 @@ using DispenseHost.PathPlan;
 
 namespace DispenseStudio;
 
+/// <summary>P9 场景交互：默认旋转，Face/Edge 模式单击选择，Ctrl 单击追加。</summary>
+public enum SurfacePickMode { Rotate, Face, Edge }
+
 /// <summary>
 /// STL 曲面作业三维预览：模型线框、加工路径、法向、开胶轨迹与针头姿态。
 /// 使用 GDI+ 正交投影，不依赖显卡或第三方三维库。
@@ -37,6 +40,19 @@ public sealed class SurfaceCanvas : Control
     private bool _hasCurrent;
     private bool _hasNeedleBody;
     private Point _lastMouse;
+    private FixtureConfig? _fixture;
+    private readonly HashSet<int> _selectedFaces = [];
+    private readonly HashSet<int> _regionFaces = [];
+    private readonly HashSet<int> _selectedEdges = [];
+    private readonly HashSet<int> _regionEdges = [];
+    private IReadOnlyList<(Point3D A, Point3D B)> _uniqueEdges = [];
+    private SurfacePickMode _pickMode = SurfacePickMode.Rotate;
+
+    public event Action<IReadOnlyList<int>>? OnFacesSelected;
+    public event Action<IReadOnlyList<int>>? OnEdgesSelected;
+    public IReadOnlyList<int> SelectedFaces => _selectedFaces.Order().ToArray();
+    public IReadOnlyList<int> SelectedEdges => _selectedEdges.Order().ToArray();
+    public SurfacePickMode PickMode => _pickMode;
 
     public SurfaceCanvas()
     {
@@ -47,10 +63,20 @@ public sealed class SurfaceCanvas : Control
                  ControlStyles.OptimizedDoubleBuffer, true);
     }
 
-    /// <summary>设置模型与曲面路径，并按场景包围盒重新适配视野。</summary>
-    public void SetScene(Mesh? mesh, IEnumerable<SurfacePath> paths)
+    /// <summary>设置模型、路径、夹具和面/边区域高亮，并按场景包围盒重新适配视野。</summary>
+    public void SetScene(Mesh? mesh, IEnumerable<SurfacePath> paths,
+        FixtureConfig? fixture = null, IEnumerable<int>? regionFaces = null,
+        IEnumerable<int>? regionEdges = null)
     {
         _mesh = mesh;
+        _uniqueEdges = mesh is null ? [] : PathGenerator.GetUniqueEdges(mesh);
+        _fixture = fixture;
+        _selectedFaces.Clear();
+        _selectedEdges.Clear();
+        _regionFaces.Clear();
+        _regionEdges.Clear();
+        if (regionFaces is not null) _regionFaces.UnionWith(regionFaces);
+        if (regionEdges is not null) _regionEdges.UnionWith(regionEdges);
         _paths.Clear();
         if (paths is not null)
         {
@@ -60,6 +86,28 @@ public sealed class SurfaceCanvas : Control
         _trail.Clear();
         FitScene();
         ResetView();
+        Invalidate();
+    }
+
+    public void SetPickMode(SurfacePickMode mode)
+    {
+        _pickMode = mode;
+        _dragging = false;
+        Cursor = mode == SurfacePickMode.Rotate ? Cursors.Default : Cursors.Cross;
+        Invalidate();
+    }
+
+    public void ClearFaceSelection()
+    {
+        _selectedFaces.Clear();
+        OnFacesSelected?.Invoke(SelectedFaces);
+        Invalidate();
+    }
+
+    public void ClearEdgeSelection()
+    {
+        _selectedEdges.Clear();
+        OnEdgesSelected?.Invoke(SelectedEdges);
         Invalidate();
     }
 
@@ -97,7 +145,7 @@ public sealed class SurfaceCanvas : Control
         Invalidate();
     }
 
-    private bool HasScene => (_mesh?.Triangles.Count ?? 0) > 0 || _paths.Count > 0;
+    private bool HasScene => (_mesh?.Triangles.Count ?? 0) > 0 || _paths.Count > 0 || _fixture is not null;
 
     private void ResetView()
     {
@@ -129,6 +177,7 @@ public sealed class SurfaceCanvas : Control
         }
         foreach (var path in _paths)
             foreach (var point in path.Points) Include(point);
+        foreach (var point in FixturePoints()) Include(point);
 
         if (!any)
         {
@@ -164,25 +213,69 @@ public sealed class SurfaceCanvas : Control
             return;
         }
 
-        // 包围球适配可保证旋转后场景仍在视野内；屏幕 Y 轴向下。
+        // 绘制与拾取共用同一投影，避免视觉位置和实际选中面不一致。
+        var project = CreateProjection();
+        DrawFixture(g, project);
+        DrawMesh(g, project);
+        DrawPaths(g, project);
+        DrawTrail(g, project);
+        DrawTool(g, project);
+        DrawOverlay(g);
+    }
+
+    private Func<Point3D, PointF> CreateProjection()
+    {
         double scale = Math.Min(ClientSize.Width, ClientSize.Height) * 0.38 / _radius * _zoom;
         double cy = Math.Cos(_yaw), sy = Math.Sin(_yaw);
         double cp = Math.Cos(_pitch), sp = Math.Sin(_pitch);
         double screenCx = ClientSize.Width / 2.0, screenCy = ClientSize.Height / 2.0;
-        PointF Project(Point3D p)
+        return p =>
         {
             double x = p.X - _center.X, y = p.Y - _center.Y, z = p.Z - _center.Z;
             double rx = cy * x + sy * y;
             double ry = -sy * x + cy * y;
             double up = cp * ry + sp * z;
             return new PointF((float)(screenCx + rx * scale), (float)(screenCy - up * scale));
-        }
+        };
+    }
 
-        DrawMesh(g, Project);
-        DrawPaths(g, Project);
-        DrawTrail(g, Project);
-        DrawTool(g, Project);
-        DrawOverlay(g);
+    private double ViewDepth(Point3D p)
+    {
+        double x = p.X - _center.X, y = p.Y - _center.Y, z = p.Z - _center.Z;
+        double ry = -Math.Sin(_yaw) * x + Math.Cos(_yaw) * y;
+        return -Math.Sin(_pitch) * ry + Math.Cos(_pitch) * z;
+    }
+
+    private IEnumerable<Point3D> FixturePoints()
+    {
+        if (_fixture is null) yield break;
+        var transform = _fixture.Pose.ToTransform();
+        foreach (var point in new[]
+        {
+            new Point3D(-35, -25, 0), new Point3D(35, -25, 0),
+            new Point3D(35, 25, 0), new Point3D(-35, 25, 0),
+            new Point3D(45, 0, 0), new Point3D(0, 35, 0), new Point3D(0, 0, 35),
+        }) yield return transform.Apply(point);
+    }
+
+    private void DrawFixture(Graphics g, Func<Point3D, PointF> project)
+    {
+        if (_fixture is null) return;
+        var transform = _fixture.Pose.ToTransform();
+        var corners = new[]
+        {
+            new Point3D(-35, -25, 0), new Point3D(35, -25, 0),
+            new Point3D(35, 25, 0), new Point3D(-35, 25, 0),
+        }.Select(p => project(transform.Apply(p))).ToArray();
+        using var baseBrush = new SolidBrush(Color.FromArgb(30, 180, 150, 255));
+        using var basePen = new Pen(Color.FromArgb(160, 150, 190, 230), 1.5f);
+        g.FillPolygon(baseBrush, corners);
+        g.DrawPolygon(basePen, corners);
+        var origin = transform.Apply(default);
+        using var axisPen = new Pen(Color.FromArgb(220, 200, 170, 80), 1.6f);
+        g.DrawLine(axisPen, project(origin), project(transform.Apply(new Point3D(45, 0, 0))));
+        g.DrawLine(axisPen, project(origin), project(transform.Apply(new Point3D(0, 35, 0))));
+        g.DrawLine(axisPen, project(origin), project(transform.Apply(new Point3D(0, 0, 35))));
     }
 
     private void DrawMesh(Graphics g, Func<Point3D, PointF> project)
@@ -202,6 +295,30 @@ public sealed class SurfaceCanvas : Control
             g.DrawLine(pen, a, b);
             g.DrawLine(pen, b, c);
             g.DrawLine(pen, c, a);
+        }
+
+        // 已保存区域和当前人工选择分别着色；索引始终对应原始三角面顺序。
+        using var regionBrush = new SolidBrush(Color.FromArgb(48, 80, 220, 160));
+        using var selectedBrush = new SolidBrush(Color.FromArgb(92, 255, 190, 50));
+        using var selectedPen = new Pen(Color.FromArgb(255, 210, 70), 1.8f);
+        foreach (int index in _regionFaces.Concat(_selectedFaces).Distinct())
+        {
+            if (index < 0 || index >= count) continue;
+            var tri = _mesh!.Triangles[index];
+            var points = new[] { project(tri.V0), project(tri.V1), project(tri.V2) };
+            g.FillPolygon(_selectedFaces.Contains(index) ? selectedBrush : regionBrush, points);
+            if (_selectedFaces.Contains(index)) g.DrawPolygon(selectedPen, points);
+        }
+
+        // 唯一边索引与 PathGenerator 完全一致，内部边和模型边界均可独立高亮。
+        using var regionEdgePen = new Pen(Color.FromArgb(220, 80, 220, 190), 2.2f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        using var selectedEdgePen = new Pen(Color.FromArgb(255, 100, 210), 3f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        foreach (int index in _regionEdges.Concat(_selectedEdges).Distinct())
+        {
+            if (index < 0 || index >= _uniqueEdges.Count) continue;
+            var edge = _uniqueEdges[index];
+            g.DrawLine(_selectedEdges.Contains(index) ? selectedEdgePen : regionEdgePen,
+                project(edge.A), project(edge.B));
         }
     }
 
@@ -269,18 +386,24 @@ public sealed class SurfaceCanvas : Control
     {
         using var brush = new SolidBrush(TextColor);
         int triangles = _mesh?.Triangles.Count ?? 0;
-        g.DrawString($"三角面 {triangles:N0} | 路径 {_paths.Count} | 轨迹点 {_trail.Count:N0}",
+        g.DrawString($"三角面 {triangles:N0} | 路径 {_paths.Count} | 选中面 {_selectedFaces.Count} | 选中边 {_selectedEdges.Count} | 轨迹点 {_trail.Count:N0}",
             _font, brush, 8, 7);
-        g.DrawString("左键拖动旋转  |  滚轮缩放  |  双击复位", _font, brush,
-            8, ClientSize.Height - _font.Height - 7);
+        string help = _pickMode switch
+        {
+            SurfacePickMode.Face => "面拾取：单击选择 / Ctrl+单击追加  |  双击复位视角",
+            SurfacePickMode.Edge => "边拾取：单击最近边 / Ctrl+单击追加  |  双击复位视角",
+            _ => "左键拖动旋转  |  滚轮缩放  |  双击复位",
+        };
+        g.DrawString(help, _font, brush, 8, ClientSize.Height - _font.Height - 7);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left) return;
-        _dragging = true;
         _lastMouse = e.Location;
+        if (_pickMode != SurfacePickMode.Rotate) return;
+        _dragging = true;
         Cursor = Cursors.SizeAll;
     }
 
@@ -298,10 +421,92 @@ public sealed class SurfaceCanvas : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        if (e.Button != MouseButtons.Left || !_dragging) return;
+        if (e.Button != MouseButtons.Left) return;
+        if (_pickMode != SurfacePickMode.Rotate)
+        {
+            if (Math.Abs(e.X - _lastMouse.X) <= 4 && Math.Abs(e.Y - _lastMouse.Y) <= 4)
+            {
+                bool additive = (ModifierKeys & Keys.Control) != 0;
+                if (_pickMode == SurfacePickMode.Face) PickFace(e.Location, additive);
+                else PickEdge(e.Location, additive);
+            }
+            return;
+        }
+        if (!_dragging) return;
         _dragging = false;
         Cursor = Cursors.Default;
     }
+
+    private void PickFace(Point screen, bool additive)
+    {
+        if (_mesh is null) return;
+        if (!additive) _selectedFaces.Clear();
+        var project = CreateProjection();
+        int hit = -1;
+        double nearest = double.NegativeInfinity;
+        for (int i = 0; i < _mesh.Triangles.Count; i++)
+        {
+            var tri = _mesh.Triangles[i];
+            var a = project(tri.V0); var b = project(tri.V1); var c = project(tri.V2);
+            if (!PointInTriangle(screen, a, b, c)) continue;
+            var center = new Point3D((tri.V0.X + tri.V1.X + tri.V2.X) / 3,
+                (tri.V0.Y + tri.V1.Y + tri.V2.Y) / 3, (tri.V0.Z + tri.V1.Z + tri.V2.Z) / 3);
+            double depth = ViewDepth(center);
+            if (depth > nearest) { nearest = depth; hit = i; }
+        }
+        if (hit >= 0 && !_selectedFaces.Add(hit)) _selectedFaces.Remove(hit);
+        OnFacesSelected?.Invoke(SelectedFaces);
+        Invalidate();
+    }
+
+    private void PickEdge(Point screen, bool additive)
+    {
+        if (_mesh is null) return;
+        if (!additive) _selectedEdges.Clear();
+        var project = CreateProjection();
+        int hit = -1;
+        double bestDistance = 9.0; // 最大拾取半径 8 像素，保留 1 像素比较余量
+        double nearestDepth = double.NegativeInfinity;
+        for (int i = 0; i < _uniqueEdges.Count; i++)
+        {
+            var edge = _uniqueEdges[i];
+            double distance = DistanceToSegment(screen, project(edge.A), project(edge.B));
+            if (distance > 8) continue;
+            double depth = ViewDepth(new Point3D((edge.A.X + edge.B.X) / 2,
+                (edge.A.Y + edge.B.Y) / 2, (edge.A.Z + edge.B.Z) / 2));
+            if (distance < bestDistance - 0.05 ||
+                (Math.Abs(distance - bestDistance) <= 0.05 && depth > nearestDepth))
+            {
+                hit = i;
+                bestDistance = distance;
+                nearestDepth = depth;
+            }
+        }
+        if (hit >= 0 && !_selectedEdges.Add(hit)) _selectedEdges.Remove(hit);
+        OnEdgesSelected?.Invoke(SelectedEdges);
+        Invalidate();
+    }
+
+    private static double DistanceToSegment(PointF p, PointF a, PointF b)
+    {
+        double dx = b.X - a.X, dy = b.Y - a.Y;
+        double lengthSquared = dx * dx + dy * dy;
+        double t = lengthSquared < 1e-9 ? 0 :
+            Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / lengthSquared, 0, 1);
+        double x = a.X + t * dx, y = a.Y + t * dy;
+        return Math.Sqrt((p.X - x) * (p.X - x) + (p.Y - y) * (p.Y - y));
+    }
+
+    private static bool PointInTriangle(PointF p, PointF a, PointF b, PointF c)
+    {
+        double d1 = Cross(p, a, b), d2 = Cross(p, b, c), d3 = Cross(p, c, a);
+        bool negative = d1 < -0.01 || d2 < -0.01 || d3 < -0.01;
+        bool positive = d1 > 0.01 || d2 > 0.01 || d3 > 0.01;
+        return !(negative && positive);
+    }
+
+    private static double Cross(PointF p, PointF a, PointF b)
+        => (p.X - b.X) * (a.Y - b.Y) - (a.X - b.X) * (p.Y - b.Y);
 
     protected override void OnMouseWheel(MouseEventArgs e)
     {

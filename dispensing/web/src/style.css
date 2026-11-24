@@ -43,6 +43,8 @@ button.warn { background: #76481a; border-color: #e67e22; }
 button.warn:hover { background: #e67e22; }
 button.toggle.on { background: #1a5276; }
 button.toggle.off { background: #2a2a4a; }
+button:disabled { opacity: 0.42; cursor: not-allowed; }
+button:disabled:hover { background: #2a2a4a; border-color: #444; }
 
 .jog-grid { display: flex; flex-direction: column; gap: 6px; }
 .jog-row { display: flex; align-items: center; gap: 8px; }
@@ -87,6 +89,42 @@ select, input[type="number"] {
   font-size: 11px; font-family: 'Consolas', monospace; color: #8be9fd; line-height: 1.5;
   word-break: break-all;
 }
+
+/* P9 生产仿真：状态只读，按钮可用性由服务端快照决定 */
+.production-project, .production-stats {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-bottom: 8px;
+  font-size: 12px; color: #aaa;
+}
+.production-project strong, .production-stats strong { color: #eee; font-weight: 500; word-break: break-all; }
+.model-status {
+  margin-bottom: 8px; padding: 6px 8px; border-left: 3px solid #62708a;
+  background: #111a2e; color: #aab7cc; font-size: 11px; line-height: 1.5; word-break: break-all;
+}
+.model-status.receiving { border-color: #2e86c1; color: #8be9fd; }
+.model-status.ready { border-color: #38d17a; color: #6fdc6f; }
+.model-status.error { border-color: #e74c3c; color: #ff8b8b; }
+.production-phase-row, .production-progress-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 12px;
+}
+.production-phase { color: #8be9fd; font-size: 14px; }
+.production-phase.blocked { color: #ff6b6b; }
+.production-phase.paused { color: #f0ad4e; }
+.production-progress-row progress { flex: 1; min-width: 0; height: 12px; accent-color: #2e86c1; }
+#production-progress-text { width: 42px; text-align: right; color: #8be9fd; font-family: 'Consolas', monospace; }
+.production-run { margin: -2px 0 8px; color: #777; font: 10px 'Consolas', monospace; word-break: break-all; }
+.production-error {
+  margin-bottom: 8px; padding: 6px 8px; border: 1px solid #8e3434; border-radius: 3px;
+  background: #351717; color: #ffaaaa; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
+.production-error.hidden { display: none; }
+.production-actions { gap: 6px; }
+.production-actions button { padding: 5px 9px; font-size: 12px; }
+.section-note { margin-bottom: 8px; color: #8992a8; font-size: 11px; line-height: 1.5; }
+#simulation-badge {
+  position: absolute; top: 14px; right: 14px; z-index: 5; pointer-events: none;
+  letter-spacing: 1px; box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+}
+.badge.simulation { background: #704817; color: #ffd58a; border: 1px solid #a96e25; }
 
 .log {
   max-height: 150px; overflow-y: auto; font-size: 12px; font-family: 'Consolas', monospace;

@@ -28,6 +28,44 @@
         </div>
       </div>
 
+      <div class="section" id="production-panel">
+        <h3>生产仿真</h3>
+        <div class="production-project">
+          <span>项目 <strong id="production-project">—</strong></span>
+          <span>修订 <strong id="production-revision">—</strong></span>
+        </div>
+        <div id="model-sync-status" class="model-status waiting">模型：等待服务端同步</div>
+        <div class="production-phase-row">
+          <span>生产阶段</span>
+          <strong id="production-phase" class="production-phase">空闲</strong>
+        </div>
+        <div class="production-progress-row">
+          <progress id="production-progress" max="100" value="0"></progress>
+          <span id="production-progress-text">0%</span>
+        </div>
+        <div class="production-stats">
+          <span>当前件 <strong id="production-piece">—</strong></span>
+          <span>完成/批次 <strong id="production-count">0 / 0</strong></span>
+          <span>工件 <strong id="production-part">未到位</strong></span>
+          <span>夹紧 <strong id="production-clamp">未夹紧</strong></span>
+        </div>
+        <div class="production-run">运行 ID：<span id="production-run-id">—</span></div>
+        <div id="production-error" class="production-error hidden"></div>
+        <div class="row production-actions">
+          <button id="btn-production-start" class="primary" disabled>开始</button>
+          <button id="btn-production-step" disabled>单步</button>
+          <button id="btn-production-pause" disabled>暂停 / 继续</button>
+          <button id="btn-production-stop" class="danger" disabled>停止</button>
+        </div>
+        <div class="row production-actions">
+          <button id="btn-production-retry" class="warn" disabled>重试</button>
+          <button id="btn-production-reset" disabled>复位</button>
+          <button id="btn-production-part" disabled>到位确认</button>
+          <button id="btn-production-clamp" disabled>夹紧确认</button>
+        </div>
+        <div class="section-note">工艺由上位机配置；此处仅查看同步场景并操作仿真。</div>
+      </div>
+
       <div class="section">
         <h3>手动控制</h3>
         <div class="jog-grid">
@@ -150,7 +188,8 @@
       </div>
 
       <div class="section">
-        <h3>CAD 模型预览</h3>
+        <h3>本地 CAD 预览（独立）</h3>
+        <div class="section-note">仅用于本地查看，会居中缩放并贴台；不改变生产模型、机器坐标或路径。</div>
         <input type="file" id="file-stl" accept=".stl" />
         <div class="row">
           <button id="btn-clear-model">清除模型</button>
@@ -169,7 +208,9 @@
     </div>
 
     <!-- 右侧 3D 场景 -->
-    <div id="canvas-container"></div>
+    <div id="canvas-container">
+      <div id="simulation-badge" class="badge simulation">模拟运行</div>
+    </div>
 
     <!-- 撞机报警弹窗 -->
     <div id="collision-alert" class="alert hidden">

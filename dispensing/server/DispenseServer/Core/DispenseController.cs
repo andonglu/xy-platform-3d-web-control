@@ -2,6 +2,11 @@ using DispenseServer.Collision;
 
 namespace DispenseServer.Core;
 
+/// <summary>P9: 一次实际点胶运行的完成结果；RunId 可用于排除停止或重试前的旧事件。</summary>
+public sealed record DispenseRunCompleted(string RunId, string JobName);
+/// <summary>P9: 一次实际点胶运行的失败结果。</summary>
+public sealed record DispenseRunFailed(string RunId, string JobName, string Error);
+
 /// <summary>
 /// 3D 点胶运动控制器: 接收上位机上传的路径，执行 3D 插补运动。
 /// 与激光项目的 MotionController 完全独立。
@@ -30,6 +35,7 @@ public sealed class DispenseController
     private sealed class RunState
     {
         public List<DispensePath3D> Paths = new();
+        public string? RunId;       // 只有 RunJob 接受执行后才分配，上传预检不算运行
         public int SegIdx;          // 当前 DispensePath3D 索引
         public double S, V, Total, Feed;
         public List<I3DPath> CurrentSegs = new();
@@ -48,12 +54,33 @@ public sealed class DispenseController
     private RunState? _run;
     private readonly int[] _jogDir = new int[Axes.Count];
     private bool _homing;
+    private bool _softPaused;
+    private bool _valveBeforePause;
     private int _homeDoneCount;
     private double _t, _emitAcc;
 
     public event Action<object>? OnState;
     public event Action<object>? OnPath;
-    public event Action<string, string>? OnEvent;   // (level, msg)
+    public event Action<string, string>? OnEvent;   // (level, msg)，保留旧协议
+    public event Action<DispenseRunCompleted>? OnJobCompleted;
+    public event Action<DispenseRunFailed>? OnJobFailed;
+
+    /// <summary>P9: 状态包可选附加生产快照，不改变旧状态字段。</summary>
+    public Func<object?>? ProductionStateProvider { get; set; }
+    public bool SoftPaused => _softPaused;
+    public string? CurrentRunId => _run?.RunId;
+    public bool IsExecuting => _run?.RunId is not null;
+    public double JobProgress
+    {
+        get
+        {
+            var r = _run;
+            if (r is null || r.Paths.Count == 0) return 0;
+            double local = r.CurrentPhase == RunState.Phase.Dispensing && r.Total > 0
+                ? Math.Clamp(r.S / r.Total, 0, 1) : 0;
+            return Math.Clamp((r.SegIdx + local) / r.Paths.Count, 0, 1);
+        }
+    }
 
     private const double PenDownZ = 8;   // 点胶工作高度
     private const double PenUpZ = 30;    // 安全高度
@@ -189,7 +216,62 @@ public sealed class DispenseController
         _jogDir[axis] = Math.Sign(dir);
     }
 
-    public void SetValve(bool on) => ValveOn = on;
+    public void SetValve(bool on)
+    {
+        if (_softPaused && on) return;
+        ValveOn = on;
+    }
+
+    /// <summary>P9: 软暂停只冻结插补、模拟轴卡和加工计时，不触发急停故障。</summary>
+    public void SoftPause()
+    {
+        if (_softPaused) return;
+        _valveBeforePause = ValveOn;
+        _softPaused = true;
+        ValveOn = false;
+        OnEvent?.Invoke("ok", "点胶作业已软暂停");
+    }
+
+    /// <summary>从原插补位置继续；仅在仍处于原出胶段时恢复暂停前的阀状态。</summary>
+    public void SoftResume()
+    {
+        if (!_softPaused) return;
+        _softPaused = false;
+        var r = _run;
+        ValveOn = _valveBeforePause && r is not null && r.RunId is not null &&
+                  r.CurrentPhase == RunState.Phase.Dispensing && !r.ValveClosedEarly;
+        _valveBeforePause = false;
+        OnEvent?.Invoke("ok", "点胶作业已从暂停位置继续");
+    }
+
+    /// <summary>清除仅用于上传预检、尚未运行的作业，不产生完成或失败事件。</summary>
+    public void ClearPendingJob()
+    {
+        if (_run?.RunId is not null) return;
+        _run = null;
+        ValveOn = false;
+    }
+
+    /// <summary>人工停止当前运行但不制造急停故障；通过类型化失败事件通知生产状态机。</summary>
+    public void CancelJob(string reason = "人工停止")
+    {
+        var r = _run;
+        _run = null;
+        _softPaused = false;
+        _valveBeforePause = false;
+        ValveOn = false;
+        Array.Clear(_jogDir);
+        if (r?.RunId is null) return;
+
+        // 非故障停止：将定位目标收回到当前位置，避免取消后继续走向旧目标。
+        for (int i = 0; i < Axes.Count; i++)
+        {
+            var status = _card.Read(i);
+            if (status.State != AxisState.Faulted) _card.SetTarget(i, status.Pos, 60);
+        }
+        OnEvent?.Invoke("warn", $"{reason}: {r.Paths.Count} 段作业已中止");
+        OnJobFailed?.Invoke(new DispenseRunFailed(r.RunId, CurrentJobName ?? "", reason));
+    }
 
     /// <summary>上传点胶路径; P8 五轴预检查失败时清空作业并返回 false</summary>
     public bool UploadPaths(List<DispensePath3D> paths, List<double[]> preview, string name)
@@ -238,6 +320,11 @@ public sealed class DispenseController
     public void RunJob()
     {
         var r = _run;
+        if (_softPaused)
+        {
+            OnEvent?.Invoke("warn", "软暂停中无法启动新作业，请先继续或停止");
+            return;
+        }
         if (r is null || r.Paths.Count == 0)
         {
             OnEvent?.Invoke("error", "没有可执行的路径，请先上传");
@@ -246,6 +333,11 @@ public sealed class DispenseController
         if (CollisionAlarm)
         {
             OnEvent?.Invoke("error", "撞机报警未复位，无法运行，请先执行 reset_alarm + home");
+            return;
+        }
+        if (AnyAxisFaulted)
+        {
+            OnEvent?.Invoke("error", "轴处于 Faulted，无法运行，请先执行 reset_alarm + home");
             return;
         }
         if (_homing)
@@ -260,6 +352,7 @@ public sealed class DispenseController
             ValveOn = false;
             return;
         }
+        r.RunId = Guid.NewGuid().ToString("N");
         r.CurrentPhase = RunState.Phase.PtpStart;
         r.SegIdx = 0;
         r.S = 0; r.V = 0;
@@ -282,11 +375,16 @@ public sealed class DispenseController
     /// <summary>急停: 停止所有运动, 轴进入 Faulted</summary>
     public void EmergencyStop()
     {
+        var r = _run;
         _run = null;
         _homing = false;
+        _softPaused = false;
+        _valveBeforePause = false;
         ValveOn = false;
         _card.StopAll();
         OnEvent?.Invoke("error", "急停触发, 轴已停止 (Faulted)");
+        if (r?.RunId is not null)
+            OnJobFailed?.Invoke(new DispenseRunFailed(r.RunId, CurrentJobName ?? "", "急停触发"));
     }
 
     /// <summary>
@@ -332,8 +430,20 @@ public sealed class DispenseController
 
     public void Tick(double dt)
     {
-        _t += dt;
+        // 软暂停期间仍发送状态，但模拟卡、IO、插补和加工时钟全部冻结。
+        if (_softPaused)
+        {
+            ValveOn = false;
+            _emitAcc += dt;
+            if (_emitAcc >= 1.0 / 30)
+            {
+                _emitAcc = 0;
+                OnState?.Invoke(BuildState());
+            }
+            return;
+        }
 
+        _t += dt;
         TickJog(dt);
         TickRun(dt);
         _card.Tick(dt);
@@ -430,6 +540,8 @@ public sealed class DispenseController
             _run = null;
             ValveOn = false;
             OnEvent?.Invoke("error", "点胶作业因撞机中止");
+            if (r.RunId is not null)
+                OnJobFailed?.Invoke(new DispenseRunFailed(r.RunId, CurrentJobName ?? "", CollisionMessage ?? "撞机"));
             return;
         }
 
@@ -503,6 +615,8 @@ public sealed class DispenseController
                     r.CurrentPhase = RunState.Phase.Done;
                     ValveOn = false;
                     OnEvent?.Invoke("ok", "点胶作业完成");
+                    if (r.RunId is not null)
+                        OnJobCompleted?.Invoke(new DispenseRunCompleted(r.RunId, CurrentJobName ?? ""));
                     _run = null;
                     return;
                 }
@@ -706,7 +820,10 @@ public sealed class DispenseController
             collision = CollisionAlarm,
             collisionMsg = CollisionMessage ?? "",
             homing = _homing,
+            softPaused = _softPaused,
+            runId = CurrentRunId,
             io,
+            production = ProductionStateProvider?.Invoke(),
         };
     }
 }

@@ -23,10 +23,22 @@ var controller = new DispenseController(card, collision, engine);
 var store = new ProgramStore(Path.Combine(AppContext.BaseDirectory, "data", "programs"));
 var io = new IoController(store, controller);
 controller.AttachIo(io);
-controller.OnEvent += (_, msg) => { if (msg == "点胶作业完成") io.NotifyJobDone(); };
+controller.OnJobCompleted += _ => io.NotifyJobDone();
 foreach (var w in store.LoadWarnings) Console.WriteLine($"[程序仓库] 跳过损坏文件: {w}");
 
-using var server = new DispenseWsServer(controller, collision, store, io, "http://localhost:8530/");
+// P9: 恢复模型与配方，但生产状态始终从 Idle 开始，不在重启后自动续产。
+var productionStore = new ProductionStore(Path.Combine(AppContext.BaseDirectory, "data", "production"));
+var production = new VirtualProductionController(controller, productionStore);
+controller.ProductionStateProvider = () => production.Snapshot;
+foreach (var w in productionStore.LoadWarnings) Console.WriteLine($"[生产仓库] {w}");
+if (productionStore.CurrentRecipe is not null)
+{
+    try { production.Configure(productionStore.CurrentRecipe); }
+    catch (Exception ex) { Console.WriteLine($"[生产仓库] 配方路径预检失败: {ex.Message}"); }
+}
+
+using var server = new DispenseWsServer(controller, collision, store, io, "http://localhost:8530/",
+    productionStore, production);
 server.Start();
 
 Console.WriteLine("3D 点胶服务端 (DispenseServer)");
@@ -44,6 +56,8 @@ Console.WriteLine();
 Console.WriteLine("指令: home / ptp / jog / valve / upload / run / estop / reset_alarm");
 Console.WriteLine("      program_save/list/load/run/delete / io_write / io_list");
 Console.WriteLine("      rtcp / rtcp_calibrate / config_machine");
+Console.WriteLine("      model_begin/chunk/commit / production_config");
+Console.WriteLine("      production_start/pause/resume/stop/reset/retry/step/confirm");
 Console.WriteLine("      add_zone / list_zones / config_axis / get_config");
 Console.WriteLine();
 Console.WriteLine("撞机恢复流程: reset_alarm (清报警+轴恢复Idle) → home (回零) → 正常运动");
@@ -62,7 +76,9 @@ while (!quit.IsSet)
     if (elapsed >= dt)
     {
         last = now;
-        controller.Tick(Math.Min(elapsed, 0.1));
+        double tickDt = Math.Min(elapsed, 0.1);
+        controller.Tick(tickDt);
+        production.Tick(tickDt);
     }
     Thread.Sleep(1);
 }

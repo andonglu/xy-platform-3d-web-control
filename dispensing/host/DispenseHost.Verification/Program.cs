@@ -1,6 +1,7 @@
 using DispenseHost.CadImport;
 using DispenseHost.Net;
 using DispenseHost.PathPlan;
+using DispenseHost.Verification;
 using DispenseServer.Core;
 using DispenseServer.Collision;
 using DispenseServer.Net;
@@ -613,6 +614,21 @@ Console.WriteLine("[7] P8 上位机: 等弧长 / 法向平滑 / C 轴连续 / �
     Check(!travelReport8.IsSafe && travelReport8.Errors.Any(e => e.Contains("X=") && e.Contains("超出行程")),
         "枢轴行程超限被上位机定位到具体路径点");
 }
+
+// ---------------- Test 8: P9 数学 / 工程 / 指纹 / 区域 / 客户端协议 ----------------
+Console.WriteLine("[8] P9 CAD 生产配置与原始模型协议");
+try
+{
+    P9Verification.RunCore();
+    Check(true, "P9 数学、V1/V2 工程、内嵌模型、指纹与面/边界区域");
+}
+catch (Exception ex) { Check(false, "P9 核心验证异常", ex.ToString()); }
+try
+{
+    await P9Verification.RunClientAsync();
+    Check(true, "P9 客户端分片、camelCase 配置、ACK 与生产快照");
+}
+catch (Exception ex) { Check(false, "P9 客户端协议验证异常", ex.ToString()); }
 
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL VERIFICATION PASSED" : $"{failures} CHECK(S) FAILED");

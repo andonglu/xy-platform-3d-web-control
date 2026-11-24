@@ -2,6 +2,7 @@ import {
   initScene, updatePositions, setPreviewPath, clearTrail,
   loadStlModel, clearModel, buildMachine, getMachineConfig,
   setSensorSignals, setVisibility, resetView, focusWorkspace,
+  setProductionConfig, loadProductionModel, updateProduction,
   DEFAULT_MACHINE,
 } from './scene.js';
 import * as sceneApi from './scene.js';   // 开发期运动学自检入口
@@ -20,6 +21,9 @@ initScene(container);
 // 状态缓存 (用于平滑插值)
 let targetState = { x: 0, y: 0, z: 0, a: 0, c: 0, toolLen: 60, valve: false, collision: false };
 let displayState = { x: 0, y: 0, z: 0, a: 0, c: 0, toolLen: 60, valve: false };
+let productionSnapshot = { phase: 'Idle', progress: 0, completedCount: 0, batchCount: 0 };
+let productionConfigMsg = null;
+let modelSync = { status: 'waiting' };
 
 const $ = (id) => document.getElementById(id);
 
@@ -80,9 +84,153 @@ connect(
       badge.className = 'badge disconnected';
       badge.textContent = '连接中...';
     }
+    renderProduction();
   },
-  (configMsg) => { applyServerConfig(configMsg); }
+  (configMsg) => { applyServerConfig(configMsg); },
+  {
+    onProductionConfig(msg) {
+      productionConfigMsg = msg;
+      setProductionConfig(msg);
+      renderProduction();
+      logEvent({ level: 'ok', msg: `已同步生产工程 ${msg.projectId || '(未命名)'} 修订 ${msg.revision ?? '—'}` });
+    },
+    onProduction(snapshot) {
+      productionSnapshot = { phase: 'Idle', ...snapshot };
+      updateProduction(productionSnapshot);
+      renderProduction();
+    },
+    onModelProgress(info) {
+      modelSync = info;
+      renderProduction();
+    },
+    onModelReady(model) {
+      try {
+        const result = loadProductionModel(model.data, model);
+        modelSync = { ...model, status: 'ready' };
+        logEvent({ level: 'ok', msg: `生产模型 ${model.fileName} 已加载 (${result.triangles} 个三角面)` });
+      } catch (e) {
+        modelSync = { ...model, status: 'error', message: `生产模型解析失败：${e.message}` };
+        logEvent({ level: 'error', msg: modelSync.message });
+      }
+      renderProduction();
+    },
+    onModelError(info) {
+      modelSync = info;
+      renderProduction();
+      logEvent({ level: 'error', msg: info.message || '模型同步失败' });
+    },
+  }
 );
+
+// ---------------------------------------------------------------------------
+// P9 生产状态与控制（工艺只读，状态完全来自服务端）
+// ---------------------------------------------------------------------------
+const PHASE_NAMES = {
+  Idle: '空闲', WaitingLoad: '待上料', Loading: '上料中',
+  WaitingClamp: '待夹紧', Ready: '待加工', Dispensing: '点胶中',
+  WaitingUnload: '待下料', Unloading: '下料中', Completed: '已完成',
+  Paused: '已暂停', Blocked: '已阻断',
+};
+const START_PHASES = ['Idle', 'Ready'];
+const STEP_PHASES = ['Idle', 'WaitingLoad', 'WaitingClamp', 'Ready', 'WaitingUnload'];
+const RUNNING_PHASES = [
+  'WaitingLoad', 'Loading', 'WaitingClamp', 'Ready',
+  'Dispensing', 'WaitingUnload', 'Unloading',
+];
+
+function snapshotError(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  return error.message || error.msg || JSON.stringify(error);
+}
+
+function setProductionEnabled(id, enabled) {
+  $(id).disabled = !isConnected() || !enabled;
+}
+
+function renderProduction() {
+  const config = productionConfigMsg?.config || {};
+  const snapshot = productionSnapshot || { phase: 'Idle' };
+  const phase = snapshot.phase || 'Idle';
+
+  $('production-project').textContent = productionConfigMsg?.projectId || '—';
+  $('production-revision').textContent = productionConfigMsg?.revision ?? '—';
+  const modelEl = $('model-sync-status');
+  const modelState = modelSync.status || 'waiting';
+  modelEl.className = `model-status ${modelState}`;
+  if (modelState === 'receiving') {
+    const percent = modelSync.totalBytes ?
+      Math.floor((modelSync.receivedBytes / modelSync.totalBytes) * 100) : 0;
+    modelEl.textContent = `模型：${modelSync.fileName || modelSync.modelId || '接收中'} · ` +
+      `${modelSync.receivedChunks || 0}/${modelSync.totalChunks || 0} 分片 (${percent}%)`;
+  } else if (modelState === 'ready') {
+    modelEl.textContent = `模型：${modelSync.fileName || modelSync.modelId || '已同步'} · 已同步`;
+  } else if (modelState === 'error') {
+    modelEl.textContent = modelSync.message || '模型同步失败';
+  } else {
+    modelEl.textContent = '模型：等待服务端同步 / 重放';
+  }
+
+  const phaseEl = $('production-phase');
+  phaseEl.textContent = `${PHASE_NAMES[phase] || phase} · ${phase}`;
+  phaseEl.className = 'production-phase' +
+    (phase === 'Blocked' ? ' blocked' : (phase === 'Paused' || snapshot.paused ? ' paused' : ''));
+  const rawProgress = Number(snapshot.progress);
+  const progress = Number.isFinite(rawProgress) ?
+    Math.max(0, Math.min(100, rawProgress <= 1 ? rawProgress * 100 : rawProgress)) : 0;
+  $('production-progress').value = progress;
+  $('production-progress-text').textContent = `${Math.round(progress)}%`;
+  $('production-piece').textContent = Number(snapshot.pieceIndex) > 0 ? snapshot.pieceIndex : '—';
+  $('production-count').textContent =
+    `${snapshot.completedCount ?? 0} / ${snapshot.batchCount ?? config.loading?.batchCount ?? 0}`;
+  $('production-part').textContent = snapshot.partPresent ? '已到位' : '未到位';
+  $('production-clamp').textContent = snapshot.clamped ? '已夹紧' : '未夹紧';
+  $('production-run-id').textContent = snapshot.runId || '—';
+
+  const error = snapshotError(snapshot.error);
+  const errorEl = $('production-error');
+  if (error || phase === 'Blocked') {
+    errorEl.textContent = `阻断原因：${error || '服务端未提供详细原因'}`;
+    errorEl.classList.remove('hidden');
+  } else {
+    errorEl.textContent = '';
+    errorEl.classList.add('hidden');
+  }
+
+  const modelReady = modelSync.status === 'ready' && !!productionConfigMsg &&
+    modelSync.modelId === productionConfigMsg.modelId;
+  const paused = phase === 'Paused' || snapshot.paused === true;
+  setProductionEnabled('btn-production-start', modelReady && START_PHASES.includes(phase));
+  setProductionEnabled('btn-production-step', modelReady && STEP_PHASES.includes(phase));
+  setProductionEnabled('btn-production-pause', paused || RUNNING_PHASES.includes(phase));
+  $('btn-production-pause').textContent = paused ? '继续' : '暂停';
+  setProductionEnabled('btn-production-stop', RUNNING_PHASES.includes(phase) || paused);
+  setProductionEnabled('btn-production-retry',
+    snapshot.canRetry === true || (phase === 'Blocked' && snapshot.canRetry !== false));
+  const resettable = ['Completed', 'Blocked', 'Paused'].includes(phase) ||
+    (phase === 'Idle' && !!(snapshot.runId || snapshot.partPresent || snapshot.completedCount || error));
+  setProductionEnabled('btn-production-reset', resettable);
+  setProductionEnabled('btn-production-part',
+    phase === 'WaitingLoad' && !snapshot.partPresent && config.fixture?.autoPartConfirm !== true);
+  setProductionEnabled('btn-production-clamp',
+    phase === 'WaitingClamp' && !snapshot.clamped && config.fixture?.autoClampConfirm !== true);
+}
+
+function sendProduction(cmd) {
+  if (!send({ cmd })) logEvent({ level: 'error', msg: `未连接服务端，无法发送 ${cmd}` });
+}
+
+$('btn-production-start').onclick = () => sendProduction('production_start');
+$('btn-production-step').onclick = () => sendProduction('production_step');
+$('btn-production-pause').onclick = () => {
+  const paused = productionSnapshot.paused === true || productionSnapshot.phase === 'Paused';
+  sendProduction(paused ? 'production_resume' : 'production_pause');
+};
+$('btn-production-stop').onclick = () => sendProduction('production_stop');
+$('btn-production-retry').onclick = () => sendProduction('production_retry');
+$('btn-production-reset').onclick = () => sendProduction('production_reset');
+$('btn-production-part').onclick = () => send({ cmd: 'production_confirm', signal: 'PART_PRESENT' });
+$('btn-production-clamp').onclick = () => send({ cmd: 'production_confirm', signal: 'CLAMP_OK' });
 
 // ---------------------------------------------------------------------------
 // 3 轴模型创建
@@ -250,7 +398,7 @@ $('file-stl').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (file) {
     loadStlModel(file);
-    logEvent({ level: 'info', msg: `已加载模型: ${file.name} (已贴合台面, 路径规划请用上位机)` });
+    logEvent({ level: 'info', msg: `已加载独立本地预览: ${file.name} (居中缩放贴台，不影响生产模型与路径)` });
   }
 });
 $('btn-clear-model').onclick = () => clearModel();
@@ -292,6 +440,7 @@ function logEvent(event) {
 // 初始化面板显示
 writeFormConfig(getMachineConfig());
 updateMachineInfo(getMachineConfig());
+renderProduction();
 
 // ---- 平滑插值主循环 ----
 function animate() {
